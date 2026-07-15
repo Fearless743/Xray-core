@@ -8,7 +8,15 @@ option java_multiple_files = true;
 
 import "common/protocol/user.proto";
 
+message Account {
+  string password = 1;
+}
+
 message ServerConfig {
   repeated xray.common.protocol.User users = 1;
   string padding_scheme = 2;
+}
+
+message ClientConfig {
+  xray.common.protocol.ServerEndpoint server = 1;
 }

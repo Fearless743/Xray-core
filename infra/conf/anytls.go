@@ -4,7 +4,6 @@ import (
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/serial"
 	"github.com/xtls/xray-core/proxy/anytls"
-	"github.com/xtls/xray-core/proxy/anytls/account"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -27,7 +26,7 @@ func (c *AnyTLSServerConfig) Build() (proto.Message, error) {
 		config.Users = append(config.Users, &protocol.User{
 			Level: uint32(user.Level),
 			Email: user.Email,
-			Account: serial.ToTypedMessage(&account.Account{
+			Account: serial.ToTypedMessage(&anytls.Account{
 				Password: user.Password,
 			}),
 		})

@@ -124,7 +124,10 @@ func (s *Server) Process(ctx context.Context, network net.Network, conn stat.Con
 			// End of headers
 			break
 		}
-		if strings.HasPrefix(strings.ToLower(line), "authorization:") {
+		lower := strings.ToLower(line)
+		if strings.HasPrefix(lower, "proxy-authorization:") {
+			authHeader = strings.TrimSpace(line[len("proxy-authorization:"):])
+		} else if strings.HasPrefix(lower, "authorization:") {
 			authHeader = strings.TrimSpace(line[len("authorization:"):])
 		}
 	}
