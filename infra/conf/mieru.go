@@ -9,6 +9,7 @@ import (
 )
 
 type MieruUserConfig struct {
+	Name     string `json:"name"`
 	Password string `json:"password"`
 	Level    byte   `json:"level"`
 	Email    string `json:"email"`
@@ -26,11 +27,20 @@ func (c *MieruServerConfig) Build() (proto.Message, error) {
 		TrafficPattern: c.TrafficPattern,
 	}
 	for _, user := range c.Users {
+		name := user.Name
+		pass := user.Password
+		if name == "" {
+			name = pass
+		}
+		if pass == "" {
+			pass = name
+		}
 		config.Users = append(config.Users, &protocol.User{
 			Level: uint32(user.Level),
 			Email: user.Email,
 			Account: serial.ToTypedMessage(&account.Account{
-				Password: user.Password,
+				Name:     name,
+				Password: pass,
 			}),
 		})
 	}

@@ -23,6 +23,8 @@ import (
 	hyCtx "github.com/xtls/xray-core/proxy/hysteria/ctx"
 	tuicAccount "github.com/xtls/xray-core/proxy/tuic/account"
 	tuicCtx "github.com/xtls/xray-core/proxy/tuic/ctx"
+	mieruAccount "github.com/xtls/xray-core/proxy/mieru/account"
+	mieruCtx "github.com/xtls/xray-core/proxy/mieru/ctx"
 	"github.com/xtls/xray-core/transport/internet"
 	"github.com/xtls/xray-core/transport/internet/stat"
 	"github.com/xtls/xray-core/transport/internet/tcp"
@@ -151,6 +153,16 @@ func (w *tcpWorker) Start() error {
 	type TuicInboundValidator interface{ TuicInboundValidator() *tuicAccount.Validator }
 	if v, ok := w.proxy.(TuicInboundValidator); ok {
 		ctx = tuicCtx.ContextWithValidator(ctx, v.TuicInboundValidator())
+	}
+	type MieruInbound interface {
+		MieruInboundValidator() *mieruAccount.Validator
+		MieruTransport() string
+		MieruTrafficPattern() string
+	}
+	if v, ok := w.proxy.(MieruInbound); ok {
+		ctx = mieruCtx.ContextWithValidator(ctx, v.MieruInboundValidator())
+		ctx = mieruCtx.ContextWithTransport(ctx, v.MieruTransport())
+		ctx = mieruCtx.ContextWithTrafficPattern(ctx, v.MieruTrafficPattern())
 	}
 
 	hub, err := internet.ListenTCP(ctx, w.address, w.port, w.stream, func(conn stat.Connection) {

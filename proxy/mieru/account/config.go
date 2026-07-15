@@ -9,28 +9,44 @@ import (
 )
 
 func (a *Account) AsAccount() (protocol.Account, error) {
-	return &MemoryAccount{Password: a.Password}, nil
+	name := a.Name
+	if name == "" {
+		name = a.Password
+	}
+	password := a.Password
+	if password == "" {
+		password = a.Name
+	}
+	return &MemoryAccount{Name: name, Password: password}, nil
 }
 
 type MemoryAccount struct {
+	Name     string
 	Password string
 }
 
 func (a *MemoryAccount) Equals(another protocol.Account) bool {
-	if acct, ok := another.(*MemoryAccount); ok {
-		return a.Password == acct.Password
+	if o, ok := another.(*MemoryAccount); ok {
+		return a.Name == o.Name && a.Password == o.Password
 	}
 	return false
 }
 
 func (a *MemoryAccount) ToProto() proto.Message {
-	return &Account{Password: a.Password}
+	return &Account{Name: a.Name, Password: a.Password}
+}
+
+// UserEntry is a snapshot for building official mieru user list.
+type UserEntry struct {
+	Name     string
+	Password string
+	Email    string
 }
 
 type Validator struct {
 	emails map[string]struct{}
-	users  map[string]*protocol.MemoryUser
-	mutex  sync.Mutex
+	users  map[string]*protocol.MemoryUser // key: name
+	mutex  sync.RWMutex
 }
 
 func NewValidator() *Validator {
@@ -43,14 +59,14 @@ func NewValidator() *Validator {
 func (v *Validator) Add(u *protocol.MemoryUser) error {
 	v.mutex.Lock()
 	defer v.mutex.Unlock()
+	acct, ok := u.Account.(*MemoryAccount)
+	if !ok {
+		return errors.New("not a mieru account")
+	}
 	if u.Email != "" {
-		if _, ok := v.emails[u.Email]; ok {
-			return errors.New("User ", u.Email, " already exists.")
-		}
 		v.emails[u.Email] = struct{}{}
 	}
-	acct := u.Account.(*MemoryAccount)
-	v.users[acct.Password] = u
+	v.users[acct.Name] = u
 	return nil
 }
 
@@ -64,49 +80,55 @@ func (v *Validator) Del(email string) error {
 		return errors.New("User ", email, " not found.")
 	}
 	delete(v.emails, email)
-	for key, user := range v.users {
-		if user.Email == email {
-			delete(v.users, key)
+	for k, u := range v.users {
+		if u.Email == email {
+			delete(v.users, k)
 			break
 		}
 	}
 	return nil
 }
 
-func (v *Validator) Get(password string) *protocol.MemoryUser {
-	v.mutex.Lock()
-	defer v.mutex.Unlock()
-	return v.users[password]
-}
-
 func (v *Validator) GetByEmail(email string) *protocol.MemoryUser {
-	if email == "" {
-		return nil
-	}
-	v.mutex.Lock()
-	defer v.mutex.Unlock()
-	if _, ok := v.emails[email]; ok {
-		for _, user := range v.users {
-			if user.Email == email {
-				return user
-			}
+	v.mutex.RLock()
+	defer v.mutex.RUnlock()
+	for _, u := range v.users {
+		if u.Email == email {
+			return u
 		}
 	}
 	return nil
 }
 
+func (v *Validator) GetByName(name string) *protocol.MemoryUser {
+	v.mutex.RLock()
+	defer v.mutex.RUnlock()
+	return v.users[name]
+}
+
 func (v *Validator) GetAll() []*protocol.MemoryUser {
-	v.mutex.Lock()
-	defer v.mutex.Unlock()
-	users := make([]*protocol.MemoryUser, 0, len(v.users))
-	for _, user := range v.users {
-		users = append(users, user)
+	v.mutex.RLock()
+	defer v.mutex.RUnlock()
+	out := make([]*protocol.MemoryUser, 0, len(v.users))
+	for _, u := range v.users {
+		out = append(out, u)
 	}
-	return users
+	return out
 }
 
 func (v *Validator) GetCount() int64 {
-	v.mutex.Lock()
-	defer v.mutex.Unlock()
+	v.mutex.RLock()
+	defer v.mutex.RUnlock()
 	return int64(len(v.users))
+}
+
+func (v *Validator) Entries() []UserEntry {
+	v.mutex.RLock()
+	defer v.mutex.RUnlock()
+	out := make([]UserEntry, 0, len(v.users))
+	for _, u := range v.users {
+		acct := u.Account.(*MemoryAccount)
+		out = append(out, UserEntry{Name: acct.Name, Password: acct.Password, Email: u.Email})
+	}
+	return out
 }

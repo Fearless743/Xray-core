@@ -4,5 +4,6 @@ package xray.proxy.mieru.account;
 option go_package = "github.com/xtls/xray-core/proxy/mieru/account";
 
 message Account {
-  string password = 1;
+  string name = 1;
+  string password = 2;
 }

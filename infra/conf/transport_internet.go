@@ -37,6 +37,7 @@ import (
 	"github.com/xtls/xray-core/transport/internet/httpupgrade"
 	"github.com/xtls/xray-core/transport/internet/hysteria"
 	"github.com/xtls/xray-core/transport/internet/tuic"
+	"github.com/xtls/xray-core/transport/internet/mieru"
 	"github.com/xtls/xray-core/transport/internet/hysteria/congestion/bbr"
 	"github.com/xtls/xray-core/transport/internet/kcp"
 	"github.com/xtls/xray-core/transport/internet/reality"
@@ -1023,6 +1024,8 @@ func (p TransportProtocol) Build() (string, error) {
 		return "hysteria", nil
 	case "tuic":
 		return "tuic", nil
+	case "mieru":
+		return "mieru", nil
 	default:
 		return "", errors.New("Config: unknown transport protocol: ", p)
 	}
@@ -1746,6 +1749,7 @@ type StreamConfig struct {
 	HTTPUPGRADESettings *HttpUpgradeConfig `json:"httpupgradeSettings"`
 	HysteriaSettings    *HysteriaConfig    `json:"hysteriaSettings"`
 	TuicSettings        *TuicConfig        `json:"tuicSettings"`
+	MieruSettings       *MieruTransportConfig `json:"mieruSettings"`
 	SocketSettings      *SocketConfig      `json:"sockopt"`
 }
 
@@ -1884,6 +1888,16 @@ func (c *StreamConfig) Build() (*internet.StreamConfig, error) {
 		config.TransportSettings = append(config.TransportSettings, &internet.TransportConfig{
 			ProtocolName: "tuic",
 			Settings:     serial.ToTypedMessage(ts),
+		})
+	}
+	if c.MieruSettings != nil {
+		ms, err := c.MieruSettings.Build()
+		if err != nil {
+			return nil, errors.New("Failed to build Mieru config.").Base(err)
+		}
+		config.TransportSettings = append(config.TransportSettings, &internet.TransportConfig{
+			ProtocolName: "mieru",
+			Settings:     serial.ToTypedMessage(ms),
 		})
 	}
 	if c.SocketSettings != nil {
@@ -2048,4 +2062,17 @@ func (c *TuicConfig) Build() (proto.Message, error) {
 		MaxUdpRelayPacketSize: c.MaxUdpRelayPacketSize,
 	}
 	return config, nil
+}
+
+
+type MieruTransportConfig struct {
+	Transport      string `json:"transport"`
+	TrafficPattern string `json:"trafficPattern"`
+}
+
+func (c *MieruTransportConfig) Build() (proto.Message, error) {
+	return &mieru.Config{
+		Transport:      c.Transport,
+		TrafficPattern: c.TrafficPattern,
+	}, nil
 }
