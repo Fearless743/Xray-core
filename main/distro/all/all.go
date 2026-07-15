@@ -49,6 +49,13 @@ import (
 	_ "github.com/xtls/xray-core/proxy/vmess/outbound"
 	_ "github.com/xtls/xray-core/proxy/wireguard"
 
+	// Extended protocol support (Fboard)
+	_ "github.com/xtls/xray-core/proxy/hysteria"
+	_ "github.com/xtls/xray-core/proxy/tuic"
+	_ "github.com/xtls/xray-core/proxy/anytls"
+	_ "github.com/xtls/xray-core/proxy/naive"
+	_ "github.com/xtls/xray-core/proxy/mieru"
+
 	// Transports
 	_ "github.com/xtls/xray-core/transport/internet/grpc"
 	_ "github.com/xtls/xray-core/transport/internet/httpupgrade"

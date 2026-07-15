@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package xray.proxy.naive;
+option csharp_namespace = "Xray.Proxy.Naive";
+option go_package = "github.com/xtls/xray-core/proxy/naive";
+option java_package = "com.xray.proxy.naive";
+option java_multiple_files = true;
+
+import "common/protocol/user.proto";
+
+message ServerConfig {
+  repeated xray.common.protocol.User users = 1;
+}
+
+message ClientConfig {
+}

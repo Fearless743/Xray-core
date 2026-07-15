@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package xray.proxy.mieru;
+option csharp_namespace = "Xray.Proxy.Mieru";
+option go_package = "github.com/xtls/xray-core/proxy/mieru";
+option java_package = "com.xray.proxy.mieru";
+option java_multiple_files = true;
+
+import "common/protocol/user.proto";
+
+message ClientConfig {
+}
+
+message ServerConfig {
+  repeated xray.common.protocol.User users = 1;
+  string transport = 2;
+  string traffic_pattern = 3;
+}

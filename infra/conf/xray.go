@@ -34,6 +34,10 @@ var (
 		"trojan":        func() interface{} { return new(TrojanServerConfig) },
 		"wireguard":     func() interface{} { return &WireGuardConfig{IsClient: false} },
 		"hysteria":      func() interface{} { return new(HysteriaServerConfig) },
+		"tuic":          func() interface{} { return new(TUICServerConfig) },
+		"anytls":        func() interface{} { return new(AnyTLSServerConfig) },
+		"naive":         func() interface{} { return new(NaiveServerConfig) },
+		"mieru":         func() interface{} { return new(MieruServerConfig) },
 		"tun":           func() interface{} { return new(TunConfig) },
 	}, "protocol", "settings")
 
