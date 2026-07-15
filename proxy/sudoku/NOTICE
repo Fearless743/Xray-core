@@ -1,0 +1,22 @@
+Sudoku Protocol Support (Xray inbound)
+======================================
+
+This directory vendors and adapts the official Sudoku protocol stack from:
+
+  https://github.com/SUDOKU-ASCII/sudoku  (GPL-3.0-or-later)
+
+and is intended to be wire-compatible with Mihomo's Sudoku client
+(type: sudoku, Mihomo > v1.19.21).
+
+IMPORTANT
+---------
+1. GPL-3.0 applies to the vendored protocol implementation under this tree.
+   Distributing a binary that links this code may require releasing the
+   combined work under GPL-3.0 terms. Review LICENSE obligations before
+   shipping Fboard-Node / Xray-core builds that include this package.
+
+2. This is NOT the Xray finalmask/sudoku appearance transform under
+   transport/internet/finalmask/sudoku, which is a different, incompatible
+   feature.
+
+3. Do not imply official endorsement by the Sudoku project.

@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package xray.proxy.sudoku;
+option csharp_namespace = "Xray.Proxy.Sudoku";
+option go_package = "github.com/xtls/xray-core/proxy/sudoku";
+option java_package = "com.xray.proxy.sudoku";
+option java_multiple_files = true;
+
+import "common/protocol/user.proto";
+
+// Account identifies a Sudoku client by its Available Private Key (hex).
+// UserHash = hex(sha256(decoded_key_bytes)[:8]) is used for allowlisting.
+message Account {
+  // Available Private Key hex (128 hex chars for split key) or raw key material hex.
+  string private_key = 1;
+  // Optional precomputed user hash (16 hex chars). When empty, derived from private_key.
+  string user_hash = 2;
+}
+
+message ServerConfig {
+  repeated xray.common.protocol.User users = 1;
+  // Server key: Master Public Key hex (or shared PSK).
+  string key = 2;
+  // chacha20-poly1305 | aes-128-gcm | none
+  string aead_method = 3;
+  uint32 padding_min = 4;
+  uint32 padding_max = 5;
+  // prefer_entropy | prefer_ascii | up_ascii_down_entropy | up_entropy_down_ascii
+  string table_type = 6;
+  bool enable_pure_downlink = 7;
+  string custom_table = 8;
+  repeated string custom_tables = 9;
+  uint32 handshake_timeout = 10;
+  bool disable_http_mask = 11;
+  // legacy | stream | poll | auto | ws
+  string http_mask_mode = 12;
+  string path_root = 13;
+  // host:port for suspicious handshake fallback
+  string fallback = 14;
+  // off | auto | on
+  string multiplex = 15;
+}

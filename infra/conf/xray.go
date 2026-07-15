@@ -38,6 +38,7 @@ var (
 		"anytls":        func() interface{} { return new(AnyTLSServerConfig) },
 		"naive":         func() interface{} { return new(NaiveServerConfig) },
 		"mieru":         func() interface{} { return new(MieruServerConfig) },
+		"sudoku":        func() interface{} { return new(SudokuServerConfig) },
 		"tun":           func() interface{} { return new(TunConfig) },
 	}, "protocol", "settings")
 

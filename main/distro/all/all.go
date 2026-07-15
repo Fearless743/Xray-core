@@ -55,6 +55,7 @@ import (
 	_ "github.com/xtls/xray-core/proxy/anytls"
 	_ "github.com/xtls/xray-core/proxy/naive"
 	_ "github.com/xtls/xray-core/proxy/mieru"
+	_ "github.com/xtls/xray-core/proxy/sudoku"
 
 	// Transports
 	_ "github.com/xtls/xray-core/transport/internet/grpc"
