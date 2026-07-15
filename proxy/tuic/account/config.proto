@@ -4,5 +4,6 @@ package xray.proxy.tuic.account;
 option go_package = "github.com/xtls/xray-core/proxy/tuic/account";
 
 message Account {
-  string password = 1;
+  string uuid = 1;
+  string password = 2;
 }

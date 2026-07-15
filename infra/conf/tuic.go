@@ -9,6 +9,7 @@ import (
 )
 
 type TUICUserConfig struct {
+	UUID     string `json:"uuid"`
 	Password string `json:"password"`
 	Level    byte   `json:"level"`
 	Email    string `json:"email"`
@@ -24,11 +25,20 @@ func (c *TUICServerConfig) Build() (proto.Message, error) {
 		CongestionControl: c.CongestionControl,
 	}
 	for _, user := range c.Users {
+		uuid := user.UUID
+		if uuid == "" {
+			uuid = user.Password // Fboard: password field carries UUID
+		}
+		password := user.Password
+		if password == "" {
+			password = uuid
+		}
 		config.Users = append(config.Users, &protocol.User{
 			Level: uint32(user.Level),
 			Email: user.Email,
 			Account: serial.ToTypedMessage(&account.Account{
-				Password: user.Password,
+				Uuid:     uuid,
+				Password: password,
 			}),
 		})
 	}

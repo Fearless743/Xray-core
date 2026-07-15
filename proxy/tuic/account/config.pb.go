@@ -23,7 +23,8 @@ const (
 
 type Account struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Password      string                 `protobuf:"bytes,1,opt,name=password,proto3" json:"password,omitempty"`
+	Uuid          string                 `protobuf:"bytes,1,opt,name=uuid,proto3" json:"uuid,omitempty"`
+	Password      string                 `protobuf:"bytes,2,opt,name=password,proto3" json:"password,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -58,6 +59,13 @@ func (*Account) Descriptor() ([]byte, []int) {
 	return file_proxy_tuic_account_config_proto_rawDescGZIP(), []int{0}
 }
 
+func (x *Account) GetUuid() string {
+	if x != nil {
+		return x.Uuid
+	}
+	return ""
+}
+
 func (x *Account) GetPassword() string {
 	if x != nil {
 		return x.Password
@@ -69,9 +77,10 @@ var File_proxy_tuic_account_config_proto protoreflect.FileDescriptor
 
 const file_proxy_tuic_account_config_proto_rawDesc = "" +
 	"\n" +
-	"\x1fproxy/tuic/account/config.proto\x12\x17xray.proxy.tuic.account\"%\n" +
-	"\aAccount\x12\x1a\n" +
-	"\bpassword\x18\x01 \x01(\tR\bpasswordB.Z,github.com/xtls/xray-core/proxy/tuic/accountb\x06proto3"
+	"\x1fproxy/tuic/account/config.proto\x12\x17xray.proxy.tuic.account\"9\n" +
+	"\aAccount\x12\x12\n" +
+	"\x04uuid\x18\x01 \x01(\tR\x04uuid\x12\x1a\n" +
+	"\bpassword\x18\x02 \x01(\tR\bpasswordB.Z,github.com/xtls/xray-core/proxy/tuic/accountb\x06proto3"
 
 var (
 	file_proxy_tuic_account_config_proto_rawDescOnce sync.Once

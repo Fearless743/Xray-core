@@ -36,6 +36,7 @@ import (
 	"github.com/xtls/xray-core/transport/internet/finalmask/xicmp"
 	"github.com/xtls/xray-core/transport/internet/httpupgrade"
 	"github.com/xtls/xray-core/transport/internet/hysteria"
+	"github.com/xtls/xray-core/transport/internet/tuic"
 	"github.com/xtls/xray-core/transport/internet/hysteria/congestion/bbr"
 	"github.com/xtls/xray-core/transport/internet/kcp"
 	"github.com/xtls/xray-core/transport/internet/reality"
@@ -1020,6 +1021,8 @@ func (p TransportProtocol) Build() (string, error) {
 		return "", errors.PrintRemovedFeatureError("QUIC transport (without web service, etc.)", "XHTTP stream-one H3")
 	case "hysteria":
 		return "hysteria", nil
+	case "tuic":
+		return "tuic", nil
 	default:
 		return "", errors.New("Config: unknown transport protocol: ", p)
 	}
@@ -1742,6 +1745,7 @@ type StreamConfig struct {
 	WSSettings          *WebSocketConfig   `json:"wsSettings"`
 	HTTPUPGRADESettings *HttpUpgradeConfig `json:"httpupgradeSettings"`
 	HysteriaSettings    *HysteriaConfig    `json:"hysteriaSettings"`
+	TuicSettings        *TuicConfig        `json:"tuicSettings"`
 	SocketSettings      *SocketConfig      `json:"sockopt"`
 }
 
@@ -1870,6 +1874,16 @@ func (c *StreamConfig) Build() (*internet.StreamConfig, error) {
 		config.TransportSettings = append(config.TransportSettings, &internet.TransportConfig{
 			ProtocolName: "hysteria",
 			Settings:     serial.ToTypedMessage(hs),
+		})
+	}
+	if c.TuicSettings != nil {
+		ts, err := c.TuicSettings.Build()
+		if err != nil {
+			return nil, errors.New("Failed to build TUIC config.").Base(err)
+		}
+		config.TransportSettings = append(config.TransportSettings, &internet.TransportConfig{
+			ProtocolName: "tuic",
+			Settings:     serial.ToTypedMessage(ts),
 		})
 	}
 	if c.SocketSettings != nil {
@@ -2016,4 +2030,22 @@ func (v *ProxyConfig) Build() (*internet.ProxyConfig, error) {
 		Tag:                 v.Tag,
 		TransportLayerProxy: v.TransportLayerProxy,
 	}, nil
+}
+
+
+type TuicConfig struct {
+	CongestionControl    string `json:"congestionControl"`
+	AuthTimeoutMs        int32  `json:"authTimeoutMs"`
+	MaxIdleTimeoutMs     int32  `json:"maxIdleTimeoutMs"`
+	MaxUdpRelayPacketSize int32 `json:"maxUdpRelayPacketSize"`
+}
+
+func (c *TuicConfig) Build() (proto.Message, error) {
+	config := &tuic.Config{
+		CongestionControl:     c.CongestionControl,
+		AuthTimeoutMs:         int64(c.AuthTimeoutMs),
+		MaxIdleTimeoutMs:      int64(c.MaxIdleTimeoutMs),
+		MaxUdpRelayPacketSize: c.MaxUdpRelayPacketSize,
+	}
+	return config, nil
 }

@@ -21,6 +21,8 @@ import (
 	"github.com/xtls/xray-core/proxy"
 	"github.com/xtls/xray-core/proxy/hysteria/account"
 	hyCtx "github.com/xtls/xray-core/proxy/hysteria/ctx"
+	tuicAccount "github.com/xtls/xray-core/proxy/tuic/account"
+	tuicCtx "github.com/xtls/xray-core/proxy/tuic/ctx"
 	"github.com/xtls/xray-core/transport/internet"
 	"github.com/xtls/xray-core/transport/internet/stat"
 	"github.com/xtls/xray-core/transport/internet/tcp"
@@ -145,6 +147,10 @@ func (w *tcpWorker) Start() error {
 	if v, ok := w.proxy.(HysteriaInboundValidator); ok {
 		ctx = hyCtx.ContextWithRequireDatagram(ctx, true)
 		ctx = hyCtx.ContextWithValidator(ctx, v.HysteriaInboundValidator())
+	}
+	type TuicInboundValidator interface{ TuicInboundValidator() *tuicAccount.Validator }
+	if v, ok := w.proxy.(TuicInboundValidator); ok {
+		ctx = tuicCtx.ContextWithValidator(ctx, v.TuicInboundValidator())
 	}
 
 	hub, err := internet.ListenTCP(ctx, w.address, w.port, w.stream, func(conn stat.Connection) {

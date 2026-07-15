@@ -1,10 +1,7 @@
 syntax = "proto3";
 
 package xray.proxy.tuic;
-option csharp_namespace = "Xray.Proxy.TUIC";
 option go_package = "github.com/xtls/xray-core/proxy/tuic";
-option java_package = "com.xray.proxy.tuic";
-option java_multiple_files = true;
 
 import "common/protocol/user.proto";
 

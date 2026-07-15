@@ -118,8 +118,7 @@ const file_proxy_tuic_config_proto_rawDesc = "" +
 	"\fClientConfig\"o\n" +
 	"\fServerConfig\x120\n" +
 	"\x05users\x18\x01 \x03(\v2\x1a.xray.common.protocol.UserR\x05users\x12-\n" +
-	"\x12congestion_control\x18\x02 \x01(\tR\x11congestionControlBO\n" +
-	"\x13com.xray.proxy.tuicP\x01Z$github.com/xtls/xray-core/proxy/tuic\xaa\x02\x0fXray.Proxy.TUICb\x06proto3"
+	"\x12congestion_control\x18\x02 \x01(\tR\x11congestionControlB&Z$github.com/xtls/xray-core/proxy/tuicb\x06proto3"
 
 var (
 	file_proxy_tuic_config_proto_rawDescOnce sync.Once

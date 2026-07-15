@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package xray.transport.internet.tuic;
+option go_package = "github.com/xtls/xray-core/transport/internet/tuic";
+
+message Config {
+  string congestion_control = 1;
+  int64 auth_timeout_ms = 2;
+  int64 max_idle_timeout_ms = 3;
+  int32 max_udp_relay_packet_size = 4;
+}
