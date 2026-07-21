@@ -533,6 +533,11 @@ type HysteriaConfig struct {
 
 	UdpIdleTimeout int64      `json:"udpIdleTimeout"`
 	Masquerade     Masquerade `json:"masquerade"`
+
+	// Realm is a full Hysteria Realms URI (realm://token@host/name).
+	Realm string `json:"realm"`
+	// RealmInsecure skips TLS verify for the rendezvous HTTPS client only.
+	RealmInsecure bool `json:"realmInsecure"`
 }
 
 func (c *HysteriaConfig) Build() (proto.Message, error) {
@@ -548,6 +553,10 @@ func (c *HysteriaConfig) Build() (proto.Message, error) {
 		return nil, errors.New("UdpIdleTimeout must be between 2 and 600")
 	}
 
+	if c.Realm != "" && c.UdpHop != nil {
+		errors.LogWarning(context.Background(), "hysteria realm mode ignores udphop")
+	}
+
 	config := &hysteria.Config{}
 	config.Version = c.Version
 	config.Auth = c.Auth
@@ -560,6 +569,8 @@ func (c *HysteriaConfig) Build() (proto.Message, error) {
 	config.MasqString = c.Masquerade.Content
 	config.MasqStringHeaders = c.Masquerade.Headers
 	config.MasqStringStatusCode = c.Masquerade.StatusCode
+	config.Realm = c.Realm
+	config.RealmInsecure = c.RealmInsecure
 
 	if config.UdpIdleTimeout == 0 {
 		config.UdpIdleTimeout = 60

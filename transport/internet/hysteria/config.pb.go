@@ -34,8 +34,13 @@ type Config struct {
 	MasqString           string                 `protobuf:"bytes,9,opt,name=masq_string,json=masqString,proto3" json:"masq_string,omitempty"`
 	MasqStringHeaders    map[string]string      `protobuf:"bytes,10,rep,name=masq_string_headers,json=masqStringHeaders,proto3" json:"masq_string_headers,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	MasqStringStatusCode int32                  `protobuf:"varint,11,opt,name=masq_string_status_code,json=masqStringStatusCode,proto3" json:"masq_string_status_code,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// Realm is a Hysteria Realms URI (realm://token@host/name). Set by conf.Build;
+	// in-process only until proto descriptors are regenerated.
+	Realm string `protobuf:"bytes,12,opt,name=realm,proto3" json:"realm,omitempty"`
+	// RealmInsecure skips TLS verification for the rendezvous client only.
+	RealmInsecure bool `protobuf:"varint,13,opt,name=realm_insecure,json=realmInsecure,proto3" json:"realm_insecure,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Config) Reset() {
@@ -143,6 +148,20 @@ func (x *Config) GetMasqStringStatusCode() int32 {
 		return x.MasqStringStatusCode
 	}
 	return 0
+}
+
+func (x *Config) GetRealm() string {
+	if x != nil {
+		return x.Realm
+	}
+	return ""
+}
+
+func (x *Config) GetRealmInsecure() bool {
+	if x != nil {
+		return x.RealmInsecure
+	}
+	return false
 }
 
 var File_transport_internet_hysteria_config_proto protoreflect.FileDescriptor

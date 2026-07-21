@@ -24,6 +24,7 @@ import (
 	"github.com/xtls/xray-core/transport/internet"
 	"github.com/xtls/xray-core/transport/internet/hysteria/congestion"
 	"github.com/xtls/xray-core/transport/internet/hysteria/congestion/bbr"
+	"github.com/xtls/xray-core/transport/internet/hysteria/realm"
 	"github.com/xtls/xray-core/transport/internet/tls"
 )
 
@@ -265,6 +266,9 @@ type Listener struct {
 	quicParams  *internet.QuicParams
 	validator   *account.Validator
 	masqHandler http.Handler
+
+	// realmRuntime is non-nil when listening via Hysteria Realms.
+	realmRuntime *realm.ServerRuntime
 }
 
 func (l *Listener) handleClient(conn *quic.Conn) {
@@ -303,6 +307,10 @@ func (l *Listener) Addr() net.Addr {
 }
 
 func (l *Listener) Close() error {
+	if l.realmRuntime != nil {
+		_ = l.realmRuntime.Close()
+		l.realmRuntime = nil
+	}
 	err := l.listener.Close()
 	_ = l.pktConn.Close()
 	return err
@@ -326,50 +334,24 @@ func Listen(ctx context.Context, address net.Address, port net.Port, streamSetti
 		return nil, errors.New("validator is nil")
 	}
 
-	var masqHandler http.Handler
-	switch strings.ToLower(config.MasqType) {
-	case "", "404":
-		masqHandler = http.NotFoundHandler()
-	case "file":
-		masqHandler = http.FileServer(http.Dir(config.MasqFile))
-	case "proxy":
-		u, err := url.Parse(config.MasqUrl)
-		if err != nil {
-			return nil, err
+	masqHandler, err := buildMasqHandler(config)
+	if err != nil {
+		return nil, err
+	}
+
+	quicParams := streamSettings.QuicParams
+	if quicParams == nil {
+		quicParams = &internet.QuicParams{
+			BbrProfile: string(bbr.ProfileStandard),
+			UdpHop:     &internet.UdpHop{},
 		}
-		transport := http.DefaultTransport.(*http.Transport)
-		if config.MasqUrlInsecure {
-			transport = transport.Clone()
-			transport.TLSClientConfig = &gotls.Config{
-				InsecureSkipVerify: true,
-			}
-		}
-		masqHandler = &httputil.ReverseProxy{
-			Rewrite: func(pr *httputil.ProxyRequest) {
-				pr.SetURL(u)
-				if !config.MasqUrlRewriteHost {
-					pr.Out.Host = pr.In.Host
-				}
-			},
-			Transport: transport,
-			ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-				w.WriteHeader(http.StatusBadGateway)
-			},
-		}
-	case "string":
-		masqHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			for k, v := range config.MasqStringHeaders {
-				w.Header().Set(k, v)
-			}
-			if config.MasqStringStatusCode != 0 {
-				w.WriteHeader(int(config.MasqStringStatusCode))
-			} else {
-				w.WriteHeader(http.StatusOK)
-			}
-			_, _ = w.Write([]byte(config.MasqString))
-		})
-	default:
-		return nil, errors.New("unknown masq type")
+	}
+
+	quicConfig := newHysteriaQuicConfig(quicParams)
+
+	// Hysteria Realms: register via rendezvous + UDP hole punching.
+	if config.GetRealm() != "" {
+		return listenRealm(ctx, address, port, streamSettings, handler, config, tlsConfig, quicParams, quicConfig, validator, masqHandler)
 	}
 
 	raw, err := internet.ListenSystemPacket(context.Background(), &net.UDPAddr{IP: address.IP(), Port: int(port)}, streamSettings.SocketSettings)
@@ -388,14 +370,144 @@ func Listen(ctx context.Context, address net.Address, port net.Port, streamSetti
 		}
 	}
 
-	quicParams := streamSettings.QuicParams
-	if quicParams == nil {
-		quicParams = &internet.QuicParams{
-			BbrProfile: string(bbr.ProfileStandard),
-			UdpHop:     &internet.UdpHop{},
+	qListener, err := quic.Listen(pktConn, tlsConfig.GetTLSConfig(), quicConfig)
+	if err != nil {
+		_ = pktConn.Close()
+		return nil, err
+	}
+
+	listener := &Listener{
+		ctx:      ctx,
+		pktConn:  pktConn,
+		listener: qListener,
+		addConn:  handler,
+
+		config:      config,
+		quicParams:  quicParams,
+		validator:   validator,
+		masqHandler: masqHandler,
+	}
+
+	go listener.keepAccepting()
+
+	return listener, nil
+}
+
+func listenRealm(ctx context.Context, address net.Address, port net.Port, streamSettings *internet.MemoryStreamConfig, handler internet.ConnHandler, config *Config, tlsConfig *tls.Config, quicParams *internet.QuicParams, quicConfig *quic.Config, validator *account.Validator, masqHandler http.Handler) (internet.Listener, error) {
+	realmAddr, err := realm.ParseAddr(config.GetRealm())
+	if err != nil {
+		return nil, errors.New("invalid hysteria realm uri").Base(err)
+	}
+
+	// Local UDP bind: URI lport > inbound port > ephemeral.
+	localPort := int(port)
+	if realmAddr.LocalPort != 0 {
+		localPort = realmAddr.LocalPort
+	}
+
+	raw, err := internet.ListenSystemPacket(context.Background(), &net.UDPAddr{IP: address.IP(), Port: localPort}, streamSettings.SocketSettings)
+	if err != nil {
+		return nil, errors.New("realm listen udp").Base(err)
+	}
+
+	punchConn, err := realm.NewPunchPacketConn(raw, 0)
+	if err != nil {
+		_ = raw.Close()
+		return nil, errors.New("realm punch conn").Base(err)
+	}
+
+	// Wrap order: raw UDP → PunchPacketConn → optional salamander finalmask → QUIC.
+	var pktConn net.PacketConn = punchConn
+	if streamSettings.UdpmaskManager != nil {
+		pktConn, err = streamSettings.UdpmaskManager.WrapPacketConnServer(punchConn)
+		if err != nil {
+			_ = raw.Close()
+			return nil, errors.New("mask err").Base(err)
 		}
 	}
 
+	runtime, err := realm.StartServerRuntime(ctx, realmAddr, punchConn, realm.RuntimeConfig{
+		Insecure: config.GetRealmInsecure(),
+	})
+	if err != nil {
+		_ = pktConn.Close()
+		return nil, errors.New("realm runtime start").Base(err)
+	}
+
+	qListener, err := quic.Listen(pktConn, tlsConfig.GetTLSConfig(), quicConfig)
+	if err != nil {
+		_ = runtime.Close()
+		_ = pktConn.Close()
+		return nil, err
+	}
+
+	errors.LogInfo(ctx, "hysteria realm listening realm=", realmAddr.RealmID, " local=", raw.LocalAddr().String())
+
+	listener := &Listener{
+		ctx:      ctx,
+		pktConn:  pktConn,
+		listener: qListener,
+		addConn:  handler,
+
+		config:       config,
+		quicParams:   quicParams,
+		validator:    validator,
+		masqHandler:  masqHandler,
+		realmRuntime: runtime,
+	}
+
+	go listener.keepAccepting()
+	return listener, nil
+}
+
+func buildMasqHandler(config *Config) (http.Handler, error) {
+	switch strings.ToLower(config.MasqType) {
+	case "", "404":
+		return http.NotFoundHandler(), nil
+	case "file":
+		return http.FileServer(http.Dir(config.MasqFile)), nil
+	case "proxy":
+		u, err := url.Parse(config.MasqUrl)
+		if err != nil {
+			return nil, err
+		}
+		transport := http.DefaultTransport.(*http.Transport)
+		if config.MasqUrlInsecure {
+			transport = transport.Clone()
+			transport.TLSClientConfig = &gotls.Config{
+				InsecureSkipVerify: true,
+			}
+		}
+		return &httputil.ReverseProxy{
+			Rewrite: func(pr *httputil.ProxyRequest) {
+				pr.SetURL(u)
+				if !config.MasqUrlRewriteHost {
+					pr.Out.Host = pr.In.Host
+				}
+			},
+			Transport: transport,
+			ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+				w.WriteHeader(http.StatusBadGateway)
+			},
+		}, nil
+	case "string":
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			for k, v := range config.MasqStringHeaders {
+				w.Header().Set(k, v)
+			}
+			if config.MasqStringStatusCode != 0 {
+				w.WriteHeader(int(config.MasqStringStatusCode))
+			} else {
+				w.WriteHeader(http.StatusOK)
+			}
+			_, _ = w.Write([]byte(config.MasqString))
+		}), nil
+	default:
+		return nil, errors.New("unknown masq type")
+	}
+}
+
+func newHysteriaQuicConfig(quicParams *internet.QuicParams) *quic.Config {
 	quicConfig := &quic.Config{
 		InitialStreamReceiveWindow:     quicParams.InitStreamReceiveWindow,
 		MaxStreamReceiveWindow:         quicParams.MaxStreamReceiveWindow,
@@ -426,28 +538,7 @@ func Listen(ctx context.Context, address net.Address, port net.Port, streamSetti
 	if quicParams.MaxIncomingStreams == 0 {
 		quicConfig.MaxIncomingStreams = 1024
 	}
-
-	qListener, err := quic.Listen(pktConn, tlsConfig.GetTLSConfig(), quicConfig)
-	if err != nil {
-		_ = pktConn.Close()
-		return nil, err
-	}
-
-	listener := &Listener{
-		ctx:      ctx,
-		pktConn:  pktConn,
-		listener: qListener,
-		addConn:  handler,
-
-		config:      config,
-		quicParams:  quicParams,
-		validator:   validator,
-		masqHandler: masqHandler,
-	}
-
-	go listener.keepAccepting()
-
-	return listener, nil
+	return quicConfig
 }
 
 func init() {
