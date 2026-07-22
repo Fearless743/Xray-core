@@ -55,6 +55,7 @@ import (
 	_ "github.com/xtls/xray-core/proxy/anytls"
 	_ "github.com/xtls/xray-core/proxy/naive"
 	_ "github.com/xtls/xray-core/proxy/mieru"
+	_ "github.com/xtls/xray-core/proxy/shadowquic"
 	_ "github.com/xtls/xray-core/proxy/sudoku"
 
 	// Transports
@@ -69,6 +70,7 @@ import (
 	_ "github.com/xtls/xray-core/transport/internet/websocket"
 	_ "github.com/xtls/xray-core/transport/internet/tuic"
 	_ "github.com/xtls/xray-core/transport/internet/mieru"
+	_ "github.com/xtls/xray-core/transport/internet/shadowquic"
 
 	// Transport headers
 	_ "github.com/xtls/xray-core/transport/internet/headers/http"

@@ -25,6 +25,8 @@ import (
 	tuicCtx "github.com/xtls/xray-core/proxy/tuic/ctx"
 	mieruAccount "github.com/xtls/xray-core/proxy/mieru/account"
 	mieruCtx "github.com/xtls/xray-core/proxy/mieru/ctx"
+	sqAccount "github.com/xtls/xray-core/proxy/shadowquic/account"
+	sqCtx "github.com/xtls/xray-core/proxy/shadowquic/ctx"
 	"github.com/xtls/xray-core/transport/internet"
 	"github.com/xtls/xray-core/transport/internet/stat"
 	"github.com/xtls/xray-core/transport/internet/tcp"
@@ -163,6 +165,12 @@ func (w *tcpWorker) Start() error {
 		ctx = mieruCtx.ContextWithValidator(ctx, v.MieruInboundValidator())
 		ctx = mieruCtx.ContextWithTransport(ctx, v.MieruTransport())
 		ctx = mieruCtx.ContextWithTrafficPattern(ctx, v.MieruTrafficPattern())
+	}
+	type ShadowquicInboundValidator interface {
+		ShadowquicInboundValidator() *sqAccount.Validator
+	}
+	if v, ok := w.proxy.(ShadowquicInboundValidator); ok {
+		ctx = sqCtx.ContextWithValidator(ctx, v.ShadowquicInboundValidator())
 	}
 
 	hub, err := internet.ListenTCP(ctx, w.address, w.port, w.stream, func(conn stat.Connection) {
