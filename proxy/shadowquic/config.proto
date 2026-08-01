@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package xray.proxy.shadowquic;
+option go_package = "github.com/xtls/xray-core/proxy/shadowquic";
+
+import "common/protocol/user.proto";
+
+message ClientConfig {
+}
+
+message ServerConfig {
+  repeated xray.common.protocol.User users = 1;
+  string congestion_control = 2;
+}

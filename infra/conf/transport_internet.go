@@ -38,6 +38,7 @@ import (
 	"github.com/xtls/xray-core/transport/internet/hysteria"
 	"github.com/xtls/xray-core/transport/internet/tuic"
 	"github.com/xtls/xray-core/transport/internet/mieru"
+	"github.com/xtls/xray-core/transport/internet/shadowquic"
 	"github.com/xtls/xray-core/transport/internet/hysteria/congestion/bbr"
 	"github.com/xtls/xray-core/transport/internet/kcp"
 	"github.com/xtls/xray-core/transport/internet/reality"
@@ -533,6 +534,11 @@ type HysteriaConfig struct {
 
 	UdpIdleTimeout int64      `json:"udpIdleTimeout"`
 	Masquerade     Masquerade `json:"masquerade"`
+
+	// Realm is a full Hysteria Realms URI (realm://token@host/name).
+	Realm string `json:"realm"`
+	// RealmInsecure skips TLS verify for the rendezvous HTTPS client only.
+	RealmInsecure bool `json:"realmInsecure"`
 }
 
 func (c *HysteriaConfig) Build() (proto.Message, error) {
@@ -548,6 +554,10 @@ func (c *HysteriaConfig) Build() (proto.Message, error) {
 		return nil, errors.New("UdpIdleTimeout must be between 2 and 600")
 	}
 
+	if c.Realm != "" && c.UdpHop != nil {
+		errors.LogWarning(context.Background(), "hysteria realm mode ignores udphop")
+	}
+
 	config := &hysteria.Config{}
 	config.Version = c.Version
 	config.Auth = c.Auth
@@ -560,6 +570,8 @@ func (c *HysteriaConfig) Build() (proto.Message, error) {
 	config.MasqString = c.Masquerade.Content
 	config.MasqStringHeaders = c.Masquerade.Headers
 	config.MasqStringStatusCode = c.Masquerade.StatusCode
+	config.Realm = c.Realm
+	config.RealmInsecure = c.RealmInsecure
 
 	if config.UdpIdleTimeout == 0 {
 		config.UdpIdleTimeout = 60
@@ -1026,6 +1038,8 @@ func (p TransportProtocol) Build() (string, error) {
 		return "tuic", nil
 	case "mieru":
 		return "mieru", nil
+	case "shadowquic":
+		return "shadowquic", nil
 	default:
 		return "", errors.New("Config: unknown transport protocol: ", p)
 	}
@@ -1748,9 +1762,10 @@ type StreamConfig struct {
 	WSSettings          *WebSocketConfig   `json:"wsSettings"`
 	HTTPUPGRADESettings *HttpUpgradeConfig `json:"httpupgradeSettings"`
 	HysteriaSettings    *HysteriaConfig    `json:"hysteriaSettings"`
-	TuicSettings        *TuicConfig        `json:"tuicSettings"`
+	TuicSettings        *TuicConfig           `json:"tuicSettings"`
 	MieruSettings       *MieruTransportConfig `json:"mieruSettings"`
-	SocketSettings      *SocketConfig      `json:"sockopt"`
+	ShadowQUICSettings  *ShadowQUICConfig     `json:"shadowquicSettings"`
+	SocketSettings      *SocketConfig         `json:"sockopt"`
 }
 
 // Build implements Buildable.
@@ -1898,6 +1913,16 @@ func (c *StreamConfig) Build() (*internet.StreamConfig, error) {
 		config.TransportSettings = append(config.TransportSettings, &internet.TransportConfig{
 			ProtocolName: "mieru",
 			Settings:     serial.ToTypedMessage(ms),
+		})
+	}
+	if c.ShadowQUICSettings != nil {
+		sq, err := c.ShadowQUICSettings.Build()
+		if err != nil {
+			return nil, errors.New("Failed to build ShadowQUIC config.").Base(err)
+		}
+		config.TransportSettings = append(config.TransportSettings, &internet.TransportConfig{
+			ProtocolName: "shadowquic",
+			Settings:     serial.ToTypedMessage(sq),
 		})
 	}
 	if c.SocketSettings != nil {
@@ -2074,5 +2099,25 @@ func (c *MieruTransportConfig) Build() (proto.Message, error) {
 	return &mieru.Config{
 		Transport:      c.Transport,
 		TrafficPattern: c.TrafficPattern,
+	}, nil
+}
+
+type ShadowQUICConfig struct {
+	JlsUpstream       string   `json:"jlsUpstream"`
+	ServerName        string   `json:"serverName"`
+	ALPN              []string `json:"alpn"`
+	CongestionControl string   `json:"congestionControl"`
+	ZeroRTT           bool     `json:"zeroRtt"`
+	MaxIdleTimeoutMs  int32    `json:"maxIdleTimeoutMs"`
+}
+
+func (c *ShadowQUICConfig) Build() (proto.Message, error) {
+	return &shadowquic.Config{
+		JlsUpstream:       c.JlsUpstream,
+		ServerName:        c.ServerName,
+		Alpn:              c.ALPN,
+		CongestionControl: c.CongestionControl,
+		ZeroRtt:           c.ZeroRTT,
+		MaxIdleTimeoutMs:  int64(c.MaxIdleTimeoutMs),
 	}, nil
 }

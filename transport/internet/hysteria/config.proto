@@ -19,4 +19,9 @@ message Config {
   string masq_string = 9;
   map<string, string> masq_string_headers = 10;
   int32 masq_string_status_code = 11;
+
+  // Hysteria Realms rendezvous URI, e.g. realm://token@host/name
+  string realm = 12;
+  // Skip TLS verification for the rendezvous HTTPS client only (not Hy2 TLS).
+  bool realm_insecure = 13;
 }

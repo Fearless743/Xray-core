@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package xray.transport.internet.shadowquic;
+option go_package = "github.com/xtls/xray-core/transport/internet/shadowquic";
+
+message Config {
+  string jls_upstream = 1;
+  string server_name = 2;
+  repeated string alpn = 3;
+  string congestion_control = 4;
+  bool zero_rtt = 5;
+  int64 max_idle_timeout_ms = 6;
+}
