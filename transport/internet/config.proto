@@ -84,6 +84,14 @@ message QuicParams {
   int64 keep_alive_period = 11;
   bool disable_path_mtu_discovery = 12;
   int64 max_incoming_streams = 13;
+  // DisableGSO turns off UDP generic segmentation offload. Set when packets
+  // are rewritten after leaving the socket (e.g. a UDP finalmask or mimic-like
+  // proxy), since the rewrite corrupts every segment but the first of a GSO
+  // batch.
+  bool disable_gso = 14;
+  // DisableChromeParrot turns off the Chrome QUIC fingerprint imitation on the
+  // Hysteria client handshake. It is on by default.
+  bool disable_chrome_parrot = 15;
 }
 
 message ProxyConfig {

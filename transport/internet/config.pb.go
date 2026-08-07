@@ -457,8 +457,16 @@ type QuicParams struct {
 	KeepAlivePeriod         int64                  `protobuf:"varint,11,opt,name=keep_alive_period,json=keepAlivePeriod,proto3" json:"keep_alive_period,omitempty"`
 	DisablePathMtuDiscovery bool                   `protobuf:"varint,12,opt,name=disable_path_mtu_discovery,json=disablePathMtuDiscovery,proto3" json:"disable_path_mtu_discovery,omitempty"`
 	MaxIncomingStreams      int64                  `protobuf:"varint,13,opt,name=max_incoming_streams,json=maxIncomingStreams,proto3" json:"max_incoming_streams,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	// DisableGSO turns off UDP generic segmentation offload. Set when packets
+	// are rewritten after leaving the socket (e.g. a UDP finalmask or mimic-like
+	// proxy), since the rewrite corrupts every segment but the first of a GSO
+	// batch.
+	DisableGso bool `protobuf:"varint,14,opt,name=disable_gso,json=disableGso,proto3" json:"disable_gso,omitempty"`
+	// DisableChromeParrot turns off the Chrome QUIC fingerprint imitation on the
+	// Hysteria client handshake. It is on by default.
+	DisableChromeParrot bool `protobuf:"varint,15,opt,name=disable_chrome_parrot,json=disableChromeParrot,proto3" json:"disable_chrome_parrot,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *QuicParams) Reset() {
@@ -580,6 +588,20 @@ func (x *QuicParams) GetMaxIncomingStreams() int64 {
 		return x.MaxIncomingStreams
 	}
 	return 0
+}
+
+func (x *QuicParams) GetDisableGso() bool {
+	if x != nil {
+		return x.DisableGso
+	}
+	return false
+}
+
+func (x *QuicParams) GetDisableChromeParrot() bool {
+	if x != nil {
+		return x.DisableChromeParrot
+	}
+	return false
 }
 
 type ProxyConfig struct {
@@ -1036,7 +1058,7 @@ const file_transport_internet_config_proto_rawDesc = "" +
 	"\x06UdpHop\x12\x14\n" +
 	"\x05ports\x18\x01 \x03(\rR\x05ports\x12!\n" +
 	"\finterval_min\x18\x02 \x01(\x03R\vintervalMin\x12!\n" +
-	"\finterval_max\x18\x03 \x01(\x03R\vintervalMax\"\xf2\x04\n" +
+	"\finterval_max\x18\x03 \x01(\x03R\vintervalMax\"\xc7\x05\n" +
 	"\n" +
 	"QuicParams\x12\x1e\n" +
 	"\n" +
@@ -1056,7 +1078,10 @@ const file_transport_internet_config_proto_rawDesc = "" +
 	" \x01(\x03R\x0emaxIdleTimeout\x12*\n" +
 	"\x11keep_alive_period\x18\v \x01(\x03R\x0fkeepAlivePeriod\x12;\n" +
 	"\x1adisable_path_mtu_discovery\x18\f \x01(\bR\x17disablePathMtuDiscovery\x120\n" +
-	"\x14max_incoming_streams\x18\r \x01(\x03R\x12maxIncomingStreams\"Q\n" +
+	"\x14max_incoming_streams\x18\r \x01(\x03R\x12maxIncomingStreams\x12\x1f\n" +
+	"\vdisable_gso\x18\x0e \x01(\bR\n" +
+	"disableGso\x122\n" +
+	"\x15disable_chrome_parrot\x18\x0f \x01(\bR\x13disableChromeParrot\"Q\n" +
 	"\vProxyConfig\x12\x10\n" +
 	"\x03tag\x18\x01 \x01(\tR\x03tag\x120\n" +
 	"\x13transportLayerProxy\x18\x02 \x01(\bR\x13transportLayerProxy\"\x93\x01\n" +

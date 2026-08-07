@@ -370,7 +370,11 @@ func Listen(ctx context.Context, address net.Address, port net.Port, streamSetti
 		}
 	}
 
-	qListener, err := quic.Listen(pktConn, tlsConfig.GetTLSConfig(), quicConfig)
+	tr := &quic.Transport{
+		Conn:       pktConn,
+		DisableGSO: quicParams.DisableGso,
+	}
+	qListener, err := tr.Listen(tlsConfig.GetTLSConfig(), quicConfig)
 	if err != nil {
 		_ = pktConn.Close()
 		return nil, err
@@ -434,7 +438,11 @@ func listenRealm(ctx context.Context, address net.Address, port net.Port, stream
 		return nil, errors.New("realm runtime start").Base(err)
 	}
 
-	qListener, err := quic.Listen(pktConn, tlsConfig.GetTLSConfig(), quicConfig)
+	tr := &quic.Transport{
+		Conn:       pktConn,
+		DisableGSO: quicParams.DisableGso,
+	}
+	qListener, err := tr.Listen(tlsConfig.GetTLSConfig(), quicConfig)
 	if err != nil {
 		_ = runtime.Close()
 		_ = pktConn.Close()

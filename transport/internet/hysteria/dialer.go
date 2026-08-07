@@ -230,6 +230,7 @@ func (c *client) dial() error {
 		EnableDatagrams:                true,
 		MaxDatagramFrameSize:           MaxDatagramFrameSize,
 		DisablePathManager:             true,
+		ChromeParrot:                   !quicParams.DisableChromeParrot,
 	}
 	if quicParams.InitStreamReceiveWindow == 0 {
 		quicConfig.InitialStreamReceiveWindow = 8388608
@@ -250,12 +251,22 @@ func (c *client) dial() error {
 	// 	quicConfig.KeepAlivePeriod = 10 * time.Second
 	// }
 
+	// The transport must be created before any packet is sent: it fixes the
+	// length at which incoming packets' connection IDs are parsed. With the
+	// ChromeParrot fingerprint (on by default) we advertise a zero-length
+	// source connection ID, as Chrome does, so the generator has to be set here
+	// rather than left at the 4-byte default.
+	tr := &quic.Transport{
+		Conn:                     pktConn,
+		DisableGSO:               quicParams.DisableGso,
+		ConnectionIDGenerator:    quic.ZeroLengthConnectionIDGenerator{},
+	}
 	var quicConn *quic.Conn
 	rt := &http3.Transport{
 		TLSClientConfig: c.tlsConfig,
 		QUICConfig:      quicConfig,
 		Dial: func(ctx context.Context, _ string, tlsCfg *go_tls.Config, cfg *quic.Config) (*quic.Conn, error) {
-			qc, err := quic.DialEarly(ctx, pktConn, remote, tlsCfg, cfg)
+			qc, err := tr.DialEarly(ctx, remote, tlsCfg, cfg)
 			if err != nil {
 				return nil, err
 			}
