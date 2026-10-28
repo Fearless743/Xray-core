@@ -66,8 +66,14 @@ func (d *BalancedDialer) Dial(destAddrStr string) (net.Conn, error) {
 }
 
 func (d *BalancedDialer) DialWithStickyKey(destAddrStr string, stickyKey string) (net.Conn, error) {
+	conn, _, err := d.DialNode(destAddrStr, stickyKey)
+	return conn, err
+}
+
+// DialNode is DialWithStickyKey that also reports the index of the node carrying the connection.
+func (d *BalancedDialer) DialNode(destAddrStr string, stickyKey string) (net.Conn, int, error) {
 	if len(d.nodes) == 0 {
-		return nil, fmt.Errorf("load balancer has no nodes")
+		return nil, -1, fmt.Errorf("load balancer has no nodes")
 	}
 
 	order := d.pickOrder(stickyKey)
@@ -76,17 +82,23 @@ func (d *BalancedDialer) DialWithStickyKey(destAddrStr string, stickyKey string)
 		node := d.nodes[idx]
 		conn, err := node.Dialer.Dial(destAddrStr)
 		if err == nil {
-			return conn, nil
+			return conn, idx, nil
 		}
 		errs = append(errs, fmt.Sprintf("%s: %v", node.ID, err))
 	}
 
-	return nil, fmt.Errorf("all upstream nodes failed: %s", strings.Join(errs, "; "))
+	return nil, -1, fmt.Errorf("all upstream nodes failed: %s", strings.Join(errs, "; "))
 }
 
 func (d *BalancedDialer) DialUDPOverTCP() (net.Conn, error) {
+	conn, _, err := d.DialUDPOverTCPNode()
+	return conn, err
+}
+
+// DialUDPOverTCPNode is DialUDPOverTCP that also reports the index of the node carrying the tunnel.
+func (d *BalancedDialer) DialUDPOverTCPNode() (net.Conn, int, error) {
 	if len(d.nodes) == 0 {
-		return nil, fmt.Errorf("load balancer has no nodes")
+		return nil, -1, fmt.Errorf("load balancer has no nodes")
 	}
 
 	order := d.pickRoundRobinOrder()
@@ -100,12 +112,12 @@ func (d *BalancedDialer) DialUDPOverTCP() (net.Conn, error) {
 		}
 		conn, err := uotDialer.DialUDPOverTCP()
 		if err == nil {
-			return conn, nil
+			return conn, idx, nil
 		}
 		errs = append(errs, fmt.Sprintf("%s: %v", node.ID, err))
 	}
 
-	return nil, fmt.Errorf("all upstream nodes failed for udp over tcp: %s", strings.Join(errs, "; "))
+	return nil, -1, fmt.Errorf("all upstream nodes failed for udp over tcp: %s", strings.Join(errs, "; "))
 }
 
 func (d *BalancedDialer) pickOrder(stickyKey string) []int {

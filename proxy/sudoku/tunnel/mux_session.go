@@ -29,6 +29,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/xtls/xray-core/proxy/sudoku/connutil"
 )
 
 const (
@@ -36,6 +38,8 @@ const (
 	muxFrameData  byte = 0x02
 	muxFrameClose byte = 0x03
 	muxFrameReset byte = 0x04
+	muxFramePing  byte = 0x05
+	muxFramePong  byte = 0x06
 )
 
 const (
@@ -48,6 +52,12 @@ const (
 	// single-tunnel large downloads while still staying well below the hard cap.
 	muxMaxDataPayload    = 128 * 1024
 	muxKeepaliveInterval = 15 * time.Second
+
+	// Frames with at most muxCoalesceMaxPayload bytes are queued and batched with the frames of
+	// other writers; larger ones are written directly, as copying them would cost more than the
+	// saved writes. A writer that finds muxCoalesceMaxPending bytes queued waits for its turn to write.
+	muxCoalesceMaxPayload = 4 * 1024
+	muxCoalesceMaxPending = 256 * 1024
 )
 
 var errMuxReceiveQueueFull = errors.New("mux receive queue full")
@@ -55,7 +65,14 @@ var errMuxReceiveQueueFull = errors.New("mux receive queue full")
 type muxSession struct {
 	conn net.Conn
 
-	writeMu sync.Mutex
+	// writeMu is held by whichever goroutine is writing to conn. Small frames wait in pending
+	// (guarded by pendMu) so that one write can carry the frames of several streams.
+	writeMu      sync.Mutex
+	writeHeader  [muxHeaderSize]byte
+	writeBuffers [2][]byte
+	pendMu       sync.Mutex
+	pending      []byte
+	spare        []byte
 
 	streamsMu sync.Mutex
 	streams   map[uint32]*muxStream
@@ -65,21 +82,26 @@ type muxSession struct {
 	closeOnce sync.Once
 	closeErr  error
 
-	lastWrite     atomic.Int64
-	keepaliveOnce sync.Once
+	// wroteSinceTick is set by sendFrame and consumed by the idle keepalive tick.
+	wroteSinceTick atomic.Bool
+	lastPong       atomic.Int64
+	keepaliveOnce  sync.Once
+	pongRequests   chan struct{}
 
 	onOpen func(stream *muxStream, payload []byte)
 }
 
 func newMuxSession(conn net.Conn, onOpen func(stream *muxStream, payload []byte)) *muxSession {
 	s := &muxSession{
-		conn:    conn,
-		streams: make(map[uint32]*muxStream),
-		closed:  make(chan struct{}),
-		onOpen:  onOpen,
+		conn:         conn,
+		streams:      make(map[uint32]*muxStream),
+		closed:       make(chan struct{}),
+		onOpen:       onOpen,
+		pongRequests: make(chan struct{}, 1),
 	}
-	s.lastWrite.Store(time.Now().UnixNano())
+	s.lastPong.Store(time.Now().UnixNano())
 	go s.readLoop()
+	go s.controlLoop()
 	return s
 }
 
@@ -119,7 +141,7 @@ func (s *muxSession) closeWithError(err error) {
 		s.streamsMu.Unlock()
 
 		for _, st := range streams {
-			st.closeNoSend(err)
+			st.abort(err)
 		}
 
 		close(s.closed)
@@ -166,54 +188,187 @@ func (s *muxSession) sendFrame(frameType byte, streamID uint32, payload []byte) 
 		return fmt.Errorf("mux payload too large: %d", len(payload))
 	}
 
-	var header [muxHeaderSize]byte
-	header[0] = frameType
-	binary.BigEndian.PutUint32(header[1:5], streamID)
-	binary.BigEndian.PutUint32(header[5:9], uint32(len(payload)))
-
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-
-	if err := writeFull(s.conn, header[:]); err != nil {
-		s.closeWithError(err)
+	var err error
+	if len(payload) <= muxCoalesceMaxPayload {
+		err = s.sendQueued(frameType, streamID, payload)
+	} else {
+		err = s.sendDirect(frameType, streamID, payload)
+	}
+	if err != nil {
 		return err
 	}
-	if len(payload) > 0 {
-		if err := writeFull(s.conn, payload); err != nil {
-			s.closeWithError(err)
-			return err
-		}
+	// Load first: the store only happens once per keepalive interval, so the hot path never
+	// writes the shared cache line.
+	if !s.wroteSinceTick.Load() {
+		s.wroteSinceTick.Store(true)
 	}
-	s.lastWrite.Store(time.Now().UnixNano())
 	return nil
 }
 
-func (s *muxSession) startKeepalive(interval time.Duration) {
+// sendQueued appends the frame to the pending batch, then writes the batch unless another
+// goroutine is already writing, which picks the frame up when it finishes its current write.
+func (s *muxSession) sendQueued(frameType byte, streamID uint32, payload []byte) error {
+	s.pendMu.Lock()
+	buf := append(s.pending, frameType)
+	buf = binary.BigEndian.AppendUint32(buf, streamID)
+	buf = binary.BigEndian.AppendUint32(buf, uint32(len(payload)))
+	s.pending = append(buf, payload...)
+	full := len(s.pending) >= muxCoalesceMaxPending
+	s.pendMu.Unlock()
+	return s.flushPending(full)
+}
+
+// flushPending writes the pending batch. Unless wait is set it gives up when another goroutine
+// holds the write role; that goroutine rechecks the batch after each write, so no frame is stranded.
+func (s *muxSession) flushPending(wait bool) error {
+	for {
+		if wait {
+			s.writeMu.Lock()
+		} else if !s.writeMu.TryLock() {
+			return nil
+		}
+		err := s.writePendingLocked()
+		s.writeMu.Unlock()
+		if err != nil {
+			return err
+		}
+		wait = false
+
+		s.pendMu.Lock()
+		empty := len(s.pending) == 0
+		s.pendMu.Unlock()
+		if empty {
+			return nil
+		}
+	}
+}
+
+// writePendingLocked writes the pending batch with one write; writeMu must be held.
+func (s *muxSession) writePendingLocked() error {
+	s.pendMu.Lock()
+	buf := s.pending
+	s.pending = s.spare[:0]
+	s.spare = nil
+	s.pendMu.Unlock()
+	if len(buf) == 0 {
+		s.recycleBatch(buf)
+		return nil
+	}
+
+	err := connutil.WriteFull(s.conn, buf)
+	s.recycleBatch(buf)
+	if err != nil {
+		s.closeWithError(err)
+	}
+	return err
+}
+
+func (s *muxSession) recycleBatch(buf []byte) {
+	if cap(buf) > 1<<20 {
+		return
+	}
+	s.pendMu.Lock()
+	s.spare = buf[:0]
+	s.pendMu.Unlock()
+}
+
+// sendDirect writes a large frame behind any batch that is already pending, which keeps the
+// frames of a stream in order.
+func (s *muxSession) sendDirect(frameType byte, streamID uint32, payload []byte) error {
+	s.writeMu.Lock()
+	err := s.writePendingLocked()
+	if err == nil {
+		header := s.writeHeader[:]
+		header[0] = frameType
+		binary.BigEndian.PutUint32(header[1:5], streamID)
+		binary.BigEndian.PutUint32(header[5:9], uint32(len(payload)))
+
+		// AEAD can include the mux header in the payload record instead of
+		// encrypting and sending an extra tiny record for every frame.
+		s.writeBuffers[0], s.writeBuffers[1] = header, payload
+		_, err = connutil.WriteBuffers(s.conn, s.writeBuffers[:])
+		s.writeBuffers[0], s.writeBuffers[1] = nil, nil
+		if err != nil {
+			s.closeWithError(err)
+		}
+	}
+	s.writeMu.Unlock()
+	if err != nil {
+		return err
+	}
+	// Frames queued while this one was being written still need a writer.
+	_ = s.flushPending(false)
+	return nil
+}
+
+// muxKeepaliveKind selects how a session proves to its peer (and to middleboxes) that it is alive.
+type muxKeepaliveKind uint8
+
+const (
+	// muxKeepaliveIdle sends an empty data frame after a full interval without any write.
+	muxKeepaliveIdle muxKeepaliveKind = iota
+	// muxKeepalivePing sends a ping every interval and closes the session once no pong
+	// has arrived for three intervals.
+	muxKeepalivePing
+)
+
+func (s *muxSession) startKeepalive(interval time.Duration, kind muxKeepaliveKind) {
 	if s == nil || interval <= 0 {
 		return
 	}
 	s.keepaliveOnce.Do(func() {
-		go func() {
-			ticker := time.NewTicker(interval)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ticker.C:
-					lastWrite := time.Unix(0, s.lastWrite.Load())
-					if time.Since(lastWrite) < interval {
-						continue
-					}
-					// Stream 0 is never allocated. Existing peers, including
-					// v0.4.7, ignore DATA for unknown streams.
-					if err := s.sendFrame(muxFrameData, 0, nil); err != nil {
-						return
-					}
-				case <-s.closed:
-					return
-				}
-			}
-		}()
+		s.wroteSinceTick.Store(false)
+		go s.keepaliveLoop(interval, kind)
 	})
+}
+
+func (s *muxSession) keepaliveLoop(interval time.Duration, kind muxKeepaliveKind) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if !s.keepaliveTick(interval, kind) {
+				return
+			}
+		case <-s.closed:
+			return
+		}
+	}
+}
+
+// keepaliveTick reports whether the session is still usable.
+func (s *muxSession) keepaliveTick(interval time.Duration, kind muxKeepaliveKind) bool {
+	if kind == muxKeepalivePing {
+		if time.Since(time.Unix(0, s.lastPong.Load())) > 3*interval {
+			s.closeWithError(errors.New("mux keepalive timeout"))
+			return false
+		}
+		return s.sendFrame(muxFramePing, 0, nil) == nil
+	}
+	if s.wroteSinceTick.Swap(false) {
+		return true
+	}
+	return s.sendFrame(muxFrameData, 0, nil) == nil
+}
+
+func (s *muxSession) requestPong() {
+	select {
+	case s.pongRequests <- struct{}{}:
+	case <-s.closed:
+	default:
+	}
+}
+
+func (s *muxSession) controlLoop() {
+	for {
+		select {
+		case <-s.pongRequests:
+			_ = s.sendFrame(muxFramePong, 0, nil)
+		case <-s.closed:
+			return
+		}
+	}
 }
 
 func (s *muxSession) sendReset(streamID uint32, msg string) {
@@ -240,6 +395,29 @@ func (s *muxSession) readLoop() {
 			return
 		}
 		n := int(payloadLen)
+		if frameType == muxFrameData {
+			if n == 0 {
+				continue
+			}
+			chunk := acquireMuxChunk(n)
+			if _, err := io.ReadFull(s.conn, chunk.data); err != nil {
+				chunk.release()
+				s.closeWithError(err)
+				return
+			}
+			st := s.getStream(streamID)
+			if st == nil {
+				chunk.release()
+				continue
+			}
+			if err := st.enqueue(chunk); err != nil {
+				st.abort(err)
+				s.removeStream(streamID)
+				// Sending a reset must not hold up unrelated streams.
+				go s.sendReset(streamID, err.Error())
+			}
+			continue
+		}
 
 		var payload []byte
 		if n > 0 {
@@ -251,6 +429,20 @@ func (s *muxSession) readLoop() {
 		}
 
 		switch frameType {
+		case muxFramePing:
+			if streamID != 0 || len(payload) != 0 {
+				s.closeWithError(errors.New("invalid mux ping frame"))
+				return
+			}
+			s.requestPong()
+
+		case muxFramePong:
+			if streamID != 0 || len(payload) != 0 {
+				s.closeWithError(errors.New("invalid mux pong frame"))
+				return
+			}
+			s.lastPong.Store(time.Now().UnixNano())
+
 		case muxFrameOpen:
 			if s.onOpen == nil {
 				s.sendReset(streamID, "unexpected open")
@@ -268,22 +460,6 @@ func (s *muxSession) readLoop() {
 			s.registerStream(st)
 			// Avoid blocking the demux loop on dial/IO.
 			go s.onOpen(st, payload)
-
-		case muxFrameData:
-			st := s.getStream(streamID)
-			if st == nil {
-				// Unknown stream; ignore to avoid killing the whole session.
-				continue
-			}
-			if len(payload) == 0 {
-				continue
-			}
-			if err := st.enqueue(payload); err != nil {
-				st.closeNoSend(err)
-				s.removeStream(streamID)
-				// Sending a reset must not hold up unrelated streams.
-				go s.sendReset(streamID, err.Error())
-			}
 
 		case muxFrameClose:
 			st := s.getStream(streamID)
@@ -303,7 +479,7 @@ func (s *muxSession) readLoop() {
 			if msg == "" {
 				msg = "reset"
 			}
-			st.closeNoSend(errors.New(msg))
+			st.abort(errors.New(msg))
 			s.removeStream(streamID)
 
 		default:
@@ -311,275 +487,4 @@ func (s *muxSession) readLoop() {
 			return
 		}
 	}
-}
-
-func writeFull(w io.Writer, b []byte) error {
-	for len(b) > 0 {
-		n, err := w.Write(b)
-		if err != nil {
-			return err
-		}
-		b = b[n:]
-	}
-	return nil
-}
-
-type muxStream struct {
-	session *muxSession
-	id      uint32
-
-	writeMu sync.Mutex
-
-	mu                sync.Mutex
-	cond              *sync.Cond
-	closed            bool
-	localReadClosed   bool
-	localWriteClosed  bool
-	remoteWriteClosed bool
-	closeErr          error
-	readBuf           []byte
-	queue             [][]byte
-	// queuedBytes includes unread bytes in readBuf and queue.
-	queuedBytes int
-
-	localAddr  net.Addr
-	remoteAddr net.Addr
-}
-
-func newMuxStream(session *muxSession, id uint32) *muxStream {
-	st := &muxStream{
-		session:    session,
-		id:         id,
-		localAddr:  &net.TCPAddr{},
-		remoteAddr: &net.TCPAddr{},
-	}
-	st.cond = sync.NewCond(&st.mu)
-	return st
-}
-
-func (c *muxStream) closeNoSend(err error) {
-	if err == nil {
-		err = io.EOF
-	}
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		return
-	}
-	c.closed = true
-	if c.closeErr == nil {
-		c.closeErr = err
-	}
-	c.cond.Broadcast()
-	c.mu.Unlock()
-}
-
-func (c *muxStream) closeRemoteWrite() bool {
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		return false
-	}
-	c.remoteWriteClosed = true
-	remove := c.localWriteClosed && (c.remoteWriteClosed || c.localReadClosed)
-	c.cond.Broadcast()
-	c.mu.Unlock()
-	return remove
-}
-
-func (c *muxStream) closedErr() error {
-	c.mu.Lock()
-	err := c.closedErrLocked()
-	c.mu.Unlock()
-	return err
-}
-
-func (c *muxStream) closedErrLocked() error {
-	if c.closeErr == nil {
-		return io.ErrClosedPipe
-	}
-	return c.closeErr
-}
-
-func (c *muxStream) Read(p []byte) (int, error) {
-	if len(p) == 0 {
-		return 0, nil
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	for len(c.readBuf) == 0 && len(c.queue) == 0 && !c.closed && !c.localReadClosed && !c.remoteWriteClosed {
-		c.cond.Wait()
-	}
-	if len(c.readBuf) == 0 && len(c.queue) > 0 {
-		c.readBuf = c.queue[0]
-		c.queue[0] = nil
-		c.queue = c.queue[1:]
-		if len(c.queue) == 0 {
-			c.queue = nil
-		}
-	}
-	if len(c.readBuf) == 0 {
-		switch {
-		case c.closed:
-			return 0, c.closedErrLocked()
-		case c.localReadClosed:
-			return 0, io.ErrClosedPipe
-		case c.remoteWriteClosed:
-			return 0, io.EOF
-		}
-	}
-
-	n := copy(p, c.readBuf)
-	c.readBuf = c.readBuf[n:]
-	if len(c.readBuf) == 0 {
-		c.readBuf = nil
-	}
-	c.queuedBytes -= n
-	if c.queuedBytes < 0 {
-		c.queuedBytes = 0
-	}
-	c.cond.Broadcast()
-	return n, nil
-}
-
-func (c *muxStream) Write(p []byte) (int, error) {
-	if len(p) == 0 {
-		return 0, nil
-	}
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-
-	if c.session.isClosed() {
-		return 0, c.session.closedErr()
-	}
-	c.mu.Lock()
-	closed := c.closed
-	writeClosed := c.localWriteClosed
-	c.mu.Unlock()
-	if closed {
-		return 0, c.closedErr()
-	}
-	if writeClosed {
-		return 0, io.ErrClosedPipe
-	}
-
-	written := 0
-	for len(p) > 0 {
-		chunk := p
-		if len(chunk) > muxMaxDataPayload {
-			chunk = p[:muxMaxDataPayload]
-		}
-		if err := c.session.sendFrame(muxFrameData, c.id, chunk); err != nil {
-			return written, err
-		}
-		written += len(chunk)
-		p = p[len(chunk):]
-	}
-	return written, nil
-}
-
-func (c *muxStream) Close() error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		return nil
-	}
-	sendClose := !c.localWriteClosed
-	c.closed = true
-	c.localReadClosed = true
-	c.localWriteClosed = true
-	if c.closeErr == nil {
-		c.closeErr = io.ErrClosedPipe
-	}
-	c.readBuf = nil
-	c.queue = nil
-	c.queuedBytes = 0
-	c.cond.Broadcast()
-	c.mu.Unlock()
-
-	if c.session != nil {
-		if sendClose {
-			_ = c.session.sendFrame(muxFrameClose, c.id, nil)
-		}
-		c.session.removeStream(c.id)
-	}
-	return nil
-}
-
-func (c *muxStream) CloseWrite() error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-
-	c.mu.Lock()
-	if c.closed || c.localWriteClosed {
-		c.mu.Unlock()
-		return nil
-	}
-	c.localWriteClosed = true
-	remove := c.remoteWriteClosed || c.localReadClosed
-	c.mu.Unlock()
-
-	if c.session == nil {
-		return nil
-	}
-	err := c.session.sendFrame(muxFrameClose, c.id, nil)
-	if remove {
-		c.session.removeStream(c.id)
-	}
-	return err
-}
-
-func (c *muxStream) CloseRead() error {
-	c.mu.Lock()
-	if c.closed || c.localReadClosed {
-		c.mu.Unlock()
-		return nil
-	}
-	c.localReadClosed = true
-	c.readBuf = nil
-	c.queue = nil
-	c.queuedBytes = 0
-	remove := c.localWriteClosed
-	c.cond.Broadcast()
-	c.mu.Unlock()
-
-	if remove && c.session != nil {
-		c.session.removeStream(c.id)
-	}
-	return nil
-}
-
-func (c *muxStream) LocalAddr() net.Addr  { return c.localAddr }
-func (c *muxStream) RemoteAddr() net.Addr { return c.remoteAddr }
-
-func (c *muxStream) SetDeadline(t time.Time) error {
-	_ = c.SetReadDeadline(t)
-	_ = c.SetWriteDeadline(t)
-	return nil
-}
-func (c *muxStream) SetReadDeadline(time.Time) error  { return nil }
-func (c *muxStream) SetWriteDeadline(time.Time) error { return nil }
-
-func (c *muxStream) enqueue(payload []byte) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.closed || c.localReadClosed || c.remoteWriteClosed {
-		return nil
-	}
-	if c.queuedBytes+len(payload) > muxMaxQueuedBytesPerStream {
-		return errMuxReceiveQueueFull
-	}
-	c.queuedBytes += len(payload)
-	if len(c.readBuf) == 0 && len(c.queue) == 0 {
-		c.readBuf = payload
-	} else {
-		c.queue = append(c.queue, payload)
-	}
-	c.cond.Broadcast()
-	return nil
 }

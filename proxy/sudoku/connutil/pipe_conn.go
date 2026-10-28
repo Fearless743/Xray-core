@@ -31,7 +31,7 @@ const PipeBufferSize = 63 * 1024
 
 var pipeBufPool = sync.Pool{
 	New: func() any {
-		return make([]byte, PipeBufferSize)
+		return new([PipeBufferSize]byte)
 	},
 }
 
@@ -55,14 +55,14 @@ func PipeConn(a, b net.Conn) {
 
 	go func() {
 		defer wg.Done()
-		copyOneWay(a, b)
+		_, _ = Copy(a, b)
 		_ = TryCloseWrite(a)
 		_ = TryCloseRead(b)
 	}()
 
 	go func() {
 		defer wg.Done()
-		copyOneWay(b, a)
+		_, _ = Copy(b, a)
 		_ = TryCloseWrite(b)
 		_ = TryCloseRead(a)
 	}()
@@ -72,8 +72,69 @@ func PipeConn(a, b net.Conn) {
 	_ = b.Close()
 }
 
-func copyOneWay(dst io.Writer, src io.Reader) {
-	buf := pipeBufPool.Get().([]byte)
-	defer pipeBufPool.Put(buf)
-	_, _ = io.CopyBuffer(dst, src, buf)
+// Copy preserves io.Copy's optional transfer methods and borrows a relay buffer
+// only when neither endpoint provides one. Wrappers can use it without hiding
+// their underlying connection's optimized path.
+func Copy(dst io.Writer, src io.Reader) (int64, error) {
+	// Avoid borrowing a relay buffer when io.Copy can transfer directly.
+	if writer, ok := src.(io.WriterTo); ok {
+		return writer.WriteTo(dst)
+	}
+	if reader, ok := dst.(io.ReaderFrom); ok {
+		return reader.ReadFrom(src)
+	}
+	return copyAdaptive(dst, src)
+}
+
+// smallRelayBuffer is what a relay reads into while its source may stay silent.
+const smallRelayBuffer = 2 * 1024
+
+var smallRelayPool = sync.Pool{
+	New: func() any {
+		return new([smallRelayBuffer]byte)
+	},
+}
+
+// copyAdaptive relays with a small buffer and moves to a PipeBufferSize one
+// while reads keep filling it, so an idle relay holds a couple of KiB instead
+// of a 63 KiB buffer parked inside a blocked Read. The big buffer goes back as
+// soon as a read comes up short.
+func copyAdaptive(dst io.Writer, src io.Reader) (written int64, err error) {
+	small := smallRelayPool.Get().(*[smallRelayBuffer]byte)
+	defer smallRelayPool.Put(small)
+	var big *[PipeBufferSize]byte
+	defer func() {
+		if big != nil {
+			pipeBufPool.Put(big)
+		}
+	}()
+
+	buf := small[:]
+	for {
+		nr, rerr := src.Read(buf)
+		if nr > 0 {
+			nw, werr := dst.Write(buf[:nr])
+			written += int64(max(nw, 0))
+			if werr == nil && nw != nr {
+				werr = io.ErrShortWrite
+			}
+			if werr != nil {
+				return written, werr
+			}
+			switch {
+			case big == nil && nr == len(buf):
+				big = pipeBufPool.Get().(*[PipeBufferSize]byte)
+				buf = big[:]
+			case big != nil && nr < smallRelayBuffer:
+				pipeBufPool.Put(big)
+				big, buf = nil, small[:]
+			}
+		}
+		if rerr != nil {
+			if rerr == io.EOF {
+				rerr = nil
+			}
+			return written, rerr
+		}
+	}
 }

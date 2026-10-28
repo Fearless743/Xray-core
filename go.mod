@@ -1,6 +1,6 @@
 module github.com/xtls/xray-core
 
-go 1.26
+go 1.26.0
 
 require (
 	filippo.io/edwards25519 v1.2.0
@@ -13,8 +13,11 @@ require (
 	github.com/google/go-cmp v0.7.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/klauspost/cpuid/v2 v2.3.0
+	github.com/metacubex/jls-quic-go v0.0.0-20260717074316-85a8decdd355
+	github.com/metacubex/jls-tls v0.0.0-20260716145614-4bf88db633e2
 	github.com/miekg/dns v1.1.72
 	github.com/pelletier/go-toml v1.9.5
+	github.com/pion/stun/v3 v3.1.2
 	github.com/pires/go-proxyproto v0.11.0
 	github.com/refraction-networking/utls v1.8.3-0.20260301010127-aa6edf4b11af
 	github.com/sagernet/sing v0.5.1
@@ -27,7 +30,8 @@ require (
 	golang.org/x/exp v0.0.0-20240904232852-e7e105dedf7e
 	golang.org/x/net v0.56.0
 	golang.org/x/sync v0.22.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/sys v0.49.0
+	golang.org/x/term v0.47.0
 	golang.org/x/time v0.12.0
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 	golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb
@@ -48,13 +52,10 @@ require (
 	github.com/metacubex/cpu v0.1.0 // indirect
 	github.com/metacubex/hkdf v0.1.0 // indirect
 	github.com/metacubex/hpke v0.1.0 // indirect
-	github.com/metacubex/jls-quic-go v0.0.0-20260717074316-85a8decdd355 // indirect
-	github.com/metacubex/jls-tls v0.0.0-20260716145614-4bf88db633e2 // indirect
 	github.com/metacubex/mlkem v0.1.0 // indirect
 	github.com/metacubex/randv2 v0.2.0 // indirect
 	github.com/pion/dtls/v3 v3.1.2 // indirect
 	github.com/pion/logging v0.2.4 // indirect
-	github.com/pion/stun/v3 v3.1.2 // indirect
 	github.com/pion/transport/v4 v4.0.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect

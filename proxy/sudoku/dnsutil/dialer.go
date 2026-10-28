@@ -10,6 +10,11 @@ func OutboundDialer(mark int) *net.Dialer {
 	return &net.Dialer{}
 }
 
+// Resolve resolves host:port using the system resolver (v0.5.2.0 name; was ResolveWithCache).
+func Resolve(ctx context.Context, address string) (string, error) {
+	return ResolveWithCache(ctx, address)
+}
+
 // ResolveWithCache resolves host:port using the system resolver.
 func ResolveWithCache(ctx context.Context, address string) (string, error) {
 	host, port, err := net.SplitHostPort(address)

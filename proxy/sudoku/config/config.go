@@ -20,8 +20,9 @@ with this application without prior consent.
 package config
 
 type Config struct {
-	Mode               string         `json:"mode"`      // "client" or "server"
-	Transport          string         `json:"transport"` // "tcp" or "udp"
+	Name               string         `json:"name,omitempty"` // Optional node name, carried in short links as "n"
+	Mode               string         `json:"mode"`           // "client" or "server"
+	Transport          string         `json:"transport"`      // "tcp" or "udp"
 	LocalPort          int            `json:"local_port"`
 	ServerAddress      string         `json:"server_address"`
 	FallbackAddr       string         `json:"fallback_address"`
@@ -40,4 +41,17 @@ type Config struct {
 	HTTPMask           HTTPMaskConfig `json:"httpmask"`
 
 	Reverse *ReverseConfig `json:"reverse,omitempty"`
+
+	// ExternalController serves the Clash-compatible RESTful API (zashboard, yacd, metacubexd)
+	// on this host:port; empty disables it. Secret, when set, must be sent as a bearer token.
+	ExternalController string `json:"external_controller,omitempty"`
+	Secret             string `json:"secret,omitempty"`
+
+	// Users is a server-side whitelist. When non-empty, only clients whose handshake
+	// user hash matches an entry are accepted.
+	Users []UserConfig `json:"users,omitempty"`
+
+	// UsageFile persists users' monthly data usage across restarts; empty keeps it in memory.
+	// The CLI sets it next to the config file, it is never read from JSON.
+	UsageFile string `json:"-"`
 }

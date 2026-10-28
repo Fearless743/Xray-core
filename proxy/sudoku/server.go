@@ -235,7 +235,7 @@ func (s *Server) Process(ctx context.Context, network xnet.Network, conn stat.Co
 		}
 	}
 
-	tunnelConn, meta, err := tunnel.HandshakeAndUpgradeWithTablesMeta(handshakeConn, cfg, s.tables)
+	tunnelConn, meta, err := tunnel.ServerHandshake(handshakeConn, cfg, s.tables)
 	if err != nil {
 		if susp, ok := err.(*tunnel.SuspiciousError); ok {
 			if allowFallback {

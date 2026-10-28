@@ -20,15 +20,14 @@ with this application without prior consent.
 package tunnel
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/xtls/xray-core/proxy/sudoku/protocol"
 	"github.com/xtls/xray-core/proxy/sudoku/obfs/httpmask"
 )
 
@@ -48,11 +47,10 @@ type MuxDialer struct {
 }
 
 func (d *MuxDialer) Dial(destAddrStr string) (net.Conn, error) {
-	var addrBuf bytes.Buffer
-	if err := protocol.WriteAddress(&addrBuf, destAddrStr); err != nil {
-		return nil, fmt.Errorf("encode address failed: %w", err)
+	payload, err := encodeMuxOpenTarget(destAddrStr)
+	if err != nil {
+		return nil, err
 	}
-	payload := addrBuf.Bytes()
 
 	var lastErr error
 	for range 2 {
@@ -80,15 +78,15 @@ func openMuxStream(sess *muxSession, payload []byte) (net.Conn, error) {
 	st := newMuxStream(sess, streamID)
 	sess.registerStream(st)
 	if err := sess.sendFrame(muxFrameOpen, streamID, payload); err != nil {
-		st.closeNoSend(err)
+		st.abort(err)
 		sess.removeStream(streamID)
 		return nil, err
 	}
 	return st, nil
 }
 
-// Warm establishes the native mux session. Split HTTPMask sessions also wait
-// for the downlink, mux preface upload, and one spare upload connection.
+// Warm establishes the native mux session. Split HTTPMask sessions wait for
+// the downlink and the first upload to be accepted before mux is exposed.
 func (d *MuxDialer) Warm(ctx context.Context) error {
 	_, err := d.getOrCreateSession(ctx)
 	return err
@@ -254,7 +252,7 @@ func (d *MuxDialer) createSession(ctx context.Context) (*muxSession, error) {
 		return nil, fmt.Errorf("mux requires multiplex=on (got %q)", d.Config.MultiplexMode())
 	}
 
-	baseConn, err := d.dialBaseContext(ctx)
+	baseConn, err := d.dial(ctx, obfsUplinkPure)
 	if err != nil {
 		return nil, err
 	}
@@ -279,7 +277,11 @@ func (d *MuxDialer) createSession(ctx context.Context) (*muxSession, error) {
 		return nil, net.ErrClosed
 	}
 	sess := newMuxSession(baseConn, nil)
-	sess.startKeepalive(muxKeepaliveInterval)
+	kind := muxKeepaliveIdle
+	if d.Config.HTTPMaskTunnelEnabled() && strings.ToLower(strings.TrimSpace(d.Config.HTTPMask.Mode)) != "ws" {
+		kind = muxKeepalivePing
+	}
+	sess.startKeepalive(muxKeepaliveInterval, kind)
 	return sess, nil
 }
 
