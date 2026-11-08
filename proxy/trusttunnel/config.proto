@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package xray.proxy.trusttunnel;
+option go_package = "github.com/xtls/xray-core/proxy/trusttunnel";
+
+import "common/protocol/user.proto";
+
+message ClientConfig {
+}
+
+message ServerConfig {
+  repeated xray.common.protocol.User users = 1;
+}

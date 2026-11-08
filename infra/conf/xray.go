@@ -40,6 +40,7 @@ var (
 		"mieru":         func() interface{} { return new(MieruServerConfig) },
 		"shadowquic":    func() interface{} { return new(ShadowQUICServerConfig) },
 		"sudoku":        func() interface{} { return new(SudokuServerConfig) },
+		"trusttunnel":   func() interface{} { return new(TrustTunnelServerConfig) },
 		"tun":           func() interface{} { return new(TunConfig) },
 	}, "protocol", "settings")
 

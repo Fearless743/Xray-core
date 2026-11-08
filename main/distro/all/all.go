@@ -57,6 +57,7 @@ import (
 	_ "github.com/xtls/xray-core/proxy/mieru"
 	_ "github.com/xtls/xray-core/proxy/shadowquic"
 	_ "github.com/xtls/xray-core/proxy/sudoku"
+	_ "github.com/xtls/xray-core/proxy/trusttunnel"
 
 	// Transports
 	_ "github.com/xtls/xray-core/transport/internet/grpc"

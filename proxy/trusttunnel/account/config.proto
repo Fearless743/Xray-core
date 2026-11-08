@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package xray.proxy.trusttunnel.account;
+option go_package = "github.com/xtls/xray-core/proxy/trusttunnel/account";
+
+message Account {
+  string username = 1;
+  string password = 2;
+}
