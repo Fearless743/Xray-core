@@ -31,8 +31,8 @@ const defaultPath = "/.well-known/masque/ip/"
 
 // Extended-CONNECT sub-protocols served on one QUIC listener.
 const (
-	protoConnectIP   = "connect-ip"    // sing-box: Basic auth, server-assigned addresses
-	protoUsqueIP     = "cf-connect-ip" // usque/mihomo: ECDSA device key, static addresses
+	protoConnectIP = "connect-ip"    // sing-box: Basic auth, server-assigned addresses
+	protoUsqueIP   = "cf-connect-ip" // usque/mihomo: ECDSA device key, static addresses
 )
 
 type Listener struct {
@@ -207,7 +207,7 @@ func listenWithCert(ctx context.Context, address xnet.Address, port xnet.Port, s
 		validator: validator,
 	}
 	l.h3server = &http3.Server{
-		Handler:        http.HandlerFunc(l.handleTunnel),
+		Handler:         http.HandlerFunc(l.handleTunnel),
 		EnableDatagrams: true,
 	}
 	go func() {

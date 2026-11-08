@@ -320,7 +320,6 @@ func (s *Server) Process(ctx context.Context, network xnet.Network, conn stat.Co
 		// Static client IPs are learned from the first packets (must fall
 		// inside the configured tunnel prefixes); nothing to assign and no
 		// ADDRESS_ASSIGN is sent (mihomo does not expect one).
-		errors.LogInfo(ctx, "masque: inbound usque tunnel user ", user.Email)
 	} else {
 		// Allocate one address per pool.
 		for _, pool := range s.pools {
@@ -345,9 +344,12 @@ func (s *Server) Process(ctx context.Context, network xnet.Network, conn stat.Co
 		Status: log.AccessAccepted,
 		Email:  user.Email,
 	})
-	errors.LogInfo(ctx, "masque: inbound tunnel assigned [", addrsString(sess.addrs), "]")
-
-	if !usque {
+	if usque {
+		// Usque/mihomo: static IPs are learned from traffic; nothing to
+		// assign or announce.
+		errors.LogInfo(ctx, "masque: inbound usque tunnel ready, learning static IPs")
+	} else {
+		errors.LogInfo(ctx, "masque: inbound tunnel assigned [", addrsString(sess.addrs), "]")
 		// Unsolicited ADDRESS_ASSIGN + ROUTE_ADVERTISEMENT (sing-box
 		// behavior). Usque/mihomo clients use static IPs and expect no
 		// server capsules, so nothing is sent there.

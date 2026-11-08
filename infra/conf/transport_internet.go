@@ -2125,6 +2125,7 @@ type ShadowQUICConfig struct {
 
 type MasqueConfig struct {
 	Path             string `json:"path"`
+	EndpointKey      string `json:"endpoint_key"`
 	Certificate      string `json:"certificate"`
 	Key              string `json:"key"`
 	MaxIdleTimeoutMs int32  `json:"maxIdleTimeoutMs"`
@@ -2133,6 +2134,7 @@ type MasqueConfig struct {
 func (c *MasqueConfig) Build() (proto.Message, error) {
 	return &masque.Config{
 		Path:             c.Path,
+		EndpointKey:      c.EndpointKey,
 		Certificate:      c.Certificate,
 		Key:              c.Key,
 		MaxIdleTimeoutMs: int64(c.MaxIdleTimeoutMs),
