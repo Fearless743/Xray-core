@@ -3,6 +3,11 @@ package masque
 import (
 	"bufio"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/base64"
 	"io"
 	stdnet "net"
 	"net/netip"
@@ -39,6 +44,7 @@ type fakeConn struct {
 	dgramToClient chan []byte
 	username      string
 	password      string
+	deviceKey     []byte
 	closed        chan struct{}
 	closeOnce     sync.Once
 	local, remote stdnet.Addr
@@ -59,6 +65,7 @@ func newFakeConn(user, pass string) *fakeConn {
 }
 
 func (f *fakeConn) Credentials() (string, string) { return f.username, f.password }
+func (f *fakeConn) DeviceKey() []byte             { return f.deviceKey }
 func (f *fakeConn) SendDatagram(b []byte) error {
 	select {
 	case f.dgramToClient <- append([]byte(nil), b...):
@@ -445,6 +452,197 @@ func TestMasqueTunnelTCPAndUDP(t *testing.T) {
 			}
 		case <-time.After(time.Until(deadline)):
 			t.Fatal("udp echo timeout")
+		}
+	}
+done:
+	fc.Close()
+	select {
+	case err := <-procErr:
+		t.Logf("process returned: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("Process did not return after Close")
+	}
+}
+
+func TestMasqueUsqueStaticIP(t *testing.T) {
+	startTCPEcho(t)
+	startUDPEcho(t)
+	s, fd := testServer(t)
+	_ = fd
+
+	// Enroll a device key: validator is keyed by base64(PKIX DER).
+	devPriv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	devDER, err := x509.MarshalPKIXPublicKey(&devPriv.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	devB64 := base64.StdEncoding.EncodeToString(devDER)
+	mu, err := (&account.Account{Username: "dev1", Password: devB64}).AsAccount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.validator.Add(&protocol.MemoryUser{Email: "user@2", Account: mu}); err != nil {
+		t.Fatal(err)
+	}
+
+	fc := newFakeConn("", "")
+	fc.deviceKey = devDER
+
+	procErr := make(chan error, 1)
+	go func() {
+		procErr <- s.Process(context.Background(), xnet.Network_TCP, fc, fd)
+	}()
+
+	// Usque mode sends no ADDRESS_ASSIGN: the stream must stay capsule-silent.
+	peerR := bufio.NewReader(fc.peerR)
+	_ = fc.peerW // keep test side open
+	type capRes struct {
+		cap capsule
+		err error
+	}
+	gotCap := make(chan capRes, 1)
+	go func() {
+		c, err := readCapsule(peerR)
+		gotCap <- capRes{c, err}
+	}()
+	select {
+	case r := <-gotCap:
+		t.Fatalf("unexpected server capsule in usque mode: %+v %v", r.cap, r.err)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	// Static client IP (inside pool, never assigned by server).
+	clientIP := netip.MustParseAddr("10.99.0.50")
+
+	// TCP through the tunnel with static source.
+	clientStack := stack.New(stack.Options{
+		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol},
+		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol},
+		HandleLocal:        true,
+	})
+	clientLink := channel.New(64, 1280, tcpip.LinkAddress([]byte{0x02, 0xaa}))
+	if err := clientStack.CreateNIC(1, clientLink); err != nil {
+		t.Fatal(err)
+	}
+	a4 := clientIP.As4()
+	if err := clientStack.AddProtocolAddress(1, tcpip.ProtocolAddress{
+		Protocol:          ipv4.ProtocolNumber,
+		AddressWithPrefix: tcpip.AddressWithPrefix{Address: tcpip.AddrFrom4Slice(a4[:]), PrefixLen: 24},
+	}, stack.AddressProperties{}); err != nil {
+		t.Fatal(err)
+	}
+	clientStack.SetRouteTable([]tcpip.Route{{Destination: header.IPv4EmptySubnet, NIC: 1}})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	udpCh := make(chan []byte, 64)
+	go func() {
+		for {
+			pb := clientLink.ReadContext(ctx)
+			if pb == nil {
+				return
+			}
+			raw := append([]byte(nil), pb.ToView().AsSlice()...)
+			pb.DecRef()
+			select {
+			case fc.dgramToServer <- prependContextZero(raw):
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case d := <-fc.dgramToClient:
+				pkt, ok := stripContextZero(d)
+				if !ok {
+					continue
+				}
+				_, _, proto, valid := parseIPPacket(pkt)
+				if !valid {
+					continue
+				}
+				if proto == 17 {
+					select {
+					case udpCh <- append([]byte(nil), pkt...):
+					case <-ctx.Done():
+						return
+					}
+					continue
+				}
+				if proto != 6 {
+					continue
+				}
+				pb := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(append([]byte(nil), pkt...))})
+				clientLink.InjectInbound(ipv4.ProtocolNumber, pb)
+			}
+		}
+	}()
+
+	var wq waiter.Queue
+	ep, epErr := clientStack.NewEndpoint(tcp.ProtocolNumber, ipv4.ProtocolNumber, &wq)
+	if epErr != nil {
+		t.Fatal(epErr)
+	}
+	dst := tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFromSlice([]byte{10, 99, 0, 200}), Port: 12399}
+	dialDone := make(chan tcpip.Error, 1)
+	go func() {
+		wqEvent, ch := waiter.NewChannelEntry(waiter.EventOut)
+		wq.EventRegister(&wqEvent)
+		defer wq.EventUnregister(&wqEvent)
+		if terr := ep.Connect(dst); terr != nil {
+			if _, started := terr.(*tcpip.ErrConnectStarted); !started {
+				dialDone <- terr
+				return
+			}
+			select {
+			case <-ch:
+				dialDone <- nil
+			case <-time.After(5 * time.Second):
+				dialDone <- &tcpip.ErrTimeout{}
+			}
+			return
+		}
+		dialDone <- nil
+	}()
+	if terr := <-dialDone; terr != nil {
+		t.Fatalf("usque TCP connect: %v", terr)
+	}
+	tcpConn := gonet.NewTCPConn(&wq, ep)
+	defer tcpConn.Close()
+	_ = tcpConn.SetDeadline(time.Now().Add(10 * time.Second))
+	if _, err := tcpConn.Write([]byte("hello-usque")); err != nil {
+		t.Fatal(err)
+	}
+	reply := make([]byte, 64)
+	n, err := io.ReadFull(tcpConn, reply[:len("hello-usque")])
+	if err != nil || string(reply[:n]) != "hello-usque" {
+		t.Fatalf("usque tcp echo: %q %v", reply[:n], err)
+	}
+
+	// UDP with static source.
+	udpReq := buildIPv4UDP(clientIP, netip.MustParseAddr("10.99.0.1"), 40001, 12398, []byte("ping-usque"))
+	select {
+	case fc.dgramToServer <- prependContextZero(udpReq):
+	case <-time.After(5 * time.Second):
+		t.Fatal("udp send blocked")
+	}
+	// UDP reply arrives on udpCh (single consumer, see bridge above).
+	deadline := time.Now().Add(8 * time.Second)
+	for {
+		select {
+		case pkt := <-udpCh:
+			if string(pkt[28:]) == "echo:ping-usque" {
+				goto done
+			}
+		case <-time.After(time.Until(deadline)):
+			t.Fatal("usque udp echo timeout")
 		}
 	}
 done:

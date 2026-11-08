@@ -3,6 +3,7 @@ package masque
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"io"
 	stdnet "net"
 	"net/netip"
@@ -42,6 +43,7 @@ const (
 type tunnelConn interface {
 	stat.Connection
 	Credentials() (username, password string)
+	DeviceKey() []byte
 	SendDatagram(b []byte) error
 	ReceiveDatagram(ctx context.Context) ([]byte, error)
 }
@@ -226,6 +228,10 @@ type masqueSession struct {
 	email      string
 	addrs      []netip.Addr
 	peerRoutes []AddressRange
+	// usque mode (mihomo/WARP): device-certificate auth, static client IPs
+	// learned from traffic (no pool allocation, no ADDRESS_ASSIGN).
+	usque   bool
+	learned []netip.Addr
 
 	ctx    context.Context
 	cancel context.CancelCauseFunc
@@ -273,8 +279,18 @@ func (s *Server) Process(ctx context.Context, network xnet.Network, conn stat.Co
 	if !ok {
 		return errors.New("masque: unsupported connection type")
 	}
-	_, password := tconn.Credentials()
-	user := s.validator.GetByPassword(password)
+	// Dual auth: usque/mihomo sessions present a device certificate (pubkey
+	// allowlist), sing-box sessions use Basic username/password.
+	var user *protocol.MemoryUser
+	usque := false
+	if der := tconn.DeviceKey(); len(der) > 0 {
+		user = s.validator.GetByPassword(base64.StdEncoding.EncodeToString(der))
+		usque = user != nil
+	}
+	if user == nil {
+		_, password := tconn.Credentials()
+		user = s.validator.GetByPassword(password)
+	}
 	if user == nil {
 		_ = tconn.Close()
 		return errors.New("masque: invalid user")
@@ -289,6 +305,7 @@ func (s *Server) Process(ctx context.Context, network xnet.Network, conn stat.Co
 		conn:        tconn,
 		user:        user,
 		email:       user.Email,
+		usque:       usque,
 		ctx:         sessCtx,
 		cancel:      cancel,
 		nat:         make(map[natKey]netip.Addr),
@@ -299,15 +316,22 @@ func (s *Server) Process(ctx context.Context, network xnet.Network, conn stat.Co
 		sess.downCounter, _ = stats.GetOrRegisterCounter(s.statsManager, "user>>>"+user.Email+">>>traffic>>>downlink")
 	}
 
-	// Allocate one address per pool.
-	for _, pool := range s.pools {
-		addr, allocated := pool.allocate()
-		if !allocated {
-			s.releaseAddrs(sess)
-			_ = tconn.Close()
-			return errors.New("masque: address pool exhausted")
+	if usque {
+		// Static client IPs are learned from the first packets (must fall
+		// inside the configured tunnel prefixes); nothing to assign and no
+		// ADDRESS_ASSIGN is sent (mihomo does not expect one).
+		errors.LogInfo(ctx, "masque: inbound usque tunnel user ", user.Email)
+	} else {
+		// Allocate one address per pool.
+		for _, pool := range s.pools {
+			addr, allocated := pool.allocate()
+			if !allocated {
+				s.releaseAddrs(sess)
+				_ = tconn.Close()
+				return errors.New("masque: address pool exhausted")
+			}
+			sess.addrs = append(sess.addrs, addr)
 		}
-		sess.addrs = append(sess.addrs, addr)
 	}
 	s.sessMu.Lock()
 	for _, addr := range sess.addrs {
@@ -323,14 +347,18 @@ func (s *Server) Process(ctx context.Context, network xnet.Network, conn stat.Co
 	})
 	errors.LogInfo(ctx, "masque: inbound tunnel assigned [", addrsString(sess.addrs), "]")
 
-	// Unsolicited ADDRESS_ASSIGN + ROUTE_ADVERTISEMENT (sing-box behavior).
-	if err := sess.writeBytes(encodeAddressCapsule(capsuleTypeAddressAssign, sess.assignedAddresses(nil))); err != nil {
-		s.closeSession(sess)
-		return err
-	}
-	if err := sess.writeBytes(encodeRouteCapsule(s.advertised)); err != nil {
-		s.closeSession(sess)
-		return err
+	if !usque {
+		// Unsolicited ADDRESS_ASSIGN + ROUTE_ADVERTISEMENT (sing-box
+		// behavior). Usque/mihomo clients use static IPs and expect no
+		// server capsules, so nothing is sent there.
+		if err := sess.writeBytes(encodeAddressCapsule(capsuleTypeAddressAssign, sess.assignedAddresses(nil))); err != nil {
+			s.closeSession(sess)
+			return err
+		}
+		if err := sess.writeBytes(encodeRouteCapsule(s.advertised)); err != nil {
+			s.closeSession(sess)
+			return err
+		}
 	}
 
 	go sess.readDatagrams()
@@ -360,6 +388,11 @@ func (s *Server) closeSession(sess *masqueSession) {
 			delete(s.sessions, addr)
 		}
 	}
+	for _, addr := range sess.learned {
+		if s.sessions[addr] == sess {
+			delete(s.sessions, addr)
+		}
+	}
 	s.sessMu.Unlock()
 	s.releaseAddrs(sess)
 	sess.udpMu.Lock()
@@ -377,6 +410,19 @@ func (s *Server) findSession(addr netip.Addr) *masqueSession {
 	s.sessMu.RLock()
 	defer s.sessMu.RUnlock()
 	return s.sessions[addr]
+}
+
+// inClientPools reports whether addr falls inside any configured tunnel prefix.
+func (s *Server) inClientPools(addr netip.Addr) bool {
+	if !addr.IsValid() {
+		return false
+	}
+	for _, pool := range s.pools {
+		if pool.contains(addr) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) isServerAddr(addr netip.Addr) bool {
@@ -522,7 +568,17 @@ func (sess *masqueSession) handlePacket(pkt []byte) {
 	if !valid {
 		return
 	}
-	if !sess.owns(src) {
+	if sess.usque {
+		// Static client IPs: accept sources inside the configured tunnel
+		// prefixes and learn them for return routing. Addresses owned by
+		// another live session are never stolen.
+		if !sess.server.inClientPools(src) {
+			return
+		}
+		if !sess.learnSource(src) {
+			return
+		}
+	} else if !sess.owns(src) {
 		return // spoofed source
 	}
 	if !decrementHopLimit(pkt) {
@@ -608,7 +664,26 @@ func (sess *masqueSession) owns(addr netip.Addr) bool {
 			return true
 		}
 	}
+	for _, a := range sess.learned {
+		if a == addr {
+			return true
+		}
+	}
 	return false
+}
+
+// learnSource registers a usque static source address for return routing.
+// Returns false when the address is owned by another live session.
+func (sess *masqueSession) learnSource(addr netip.Addr) bool {
+	s := sess.server
+	s.sessMu.Lock()
+	defer s.sessMu.Unlock()
+	if cur, ok := s.sessions[addr]; ok {
+		return cur == sess
+	}
+	s.sessions[addr] = sess
+	sess.learned = append(sess.learned, addr)
+	return true
 }
 
 // ─── stack outbound drain ───────────────────────────────────────────────────

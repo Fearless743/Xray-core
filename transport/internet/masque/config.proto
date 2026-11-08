@@ -4,12 +4,15 @@ package xray.transport.internet.masque;
 option go_package = "github.com/xtls/xray-core/transport/internet/masque";
 
 message Config {
-  // URI path prefix of the CONNECT-IP resource.
+  // URI path prefix of the sing-box CONNECT-IP resource.
   // Default: /.well-known/masque/ip/
   string path = 1;
-  // PEM-encoded TLS certificate for the QUIC listener.
-  string certificate = 2;
-  // PEM-encoded TLS private key for the QUIC listener.
-  string key = 3;
-  int64 max_idle_timeout_ms = 4;
+  // PEM-encoded ECDSA P-256 endpoint private key. The QUIC listener serves
+  // a self-signed certificate derived from this key; usque/mihomo clients
+  // pin the endpoint public key, sing-box clients must skip verification.
+  string endpoint_key = 2;
+  int64 max_idle_timeout_ms = 3;
+  // FEDERATION NOTE: legacy certificate/key fields, superseded by endpoint_key.
+  string certificate = 4;
+  string key = 5;
 }

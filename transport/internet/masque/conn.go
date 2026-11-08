@@ -18,6 +18,10 @@ import (
 type sessionConn interface {
 	stat.Connection
 	Credentials() (username, password string)
+	// DeviceKey returns the DER-encoded PKIX ECDSA P-256 device public key
+	// presented as the QUIC client certificate (usque/mihomo mode), or nil
+	// for Basic-auth (sing-box) sessions.
+	DeviceKey() []byte
 	SendDatagram(b []byte) error
 	ReceiveDatagram(ctx context.Context) ([]byte, error)
 }
@@ -31,12 +35,17 @@ type Conn struct {
 	remote   net.Addr
 	username string
 	password string
+	// deviceKey authenticates usque sessions; nil for Basic-auth sessions.
+	deviceKey []byte
 
 	closeOnce sync.Once
 	closeErr  error
 }
 
 func (c *Conn) Credentials() (string, string) { return c.username, c.password }
+
+// DeviceKey implements sessionConn.
+func (c *Conn) DeviceKey() []byte { return c.deviceKey }
 
 func (c *Conn) SendDatagram(b []byte) error { return c.stream.SendDatagram(b) }
 
