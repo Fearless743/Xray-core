@@ -113,11 +113,22 @@ func (s *Server) Process(ctx context.Context, network net.Network, conn stat.Con
 	target := parts[1]
 
 	// Read headers
+	// 安全上限：防止未认证对端用无限 header 行 / 无限字节耗尽内存。
+	// 超限直接返回错误，调用方关闭连接。
+	const (
+		maxNaiveHeaderLines = 100
+		maxNaiveHeaderBytes = 32 * 1024
+	)
 	var authHeader string
-	for {
+	var headerBytes int
+	for lines := 0; ; lines++ {
 		line, err := br.ReadString('\n')
 		if err != nil {
 			return errors.New("failed to read header").Base(err)
+		}
+		headerBytes += len(line)
+		if lines >= maxNaiveHeaderLines || headerBytes > maxNaiveHeaderBytes {
+			return errors.New("too many header bytes")
 		}
 		line = strings.TrimRight(line, "\r\n")
 		if line == "" {
@@ -242,15 +253,22 @@ func (s *Server) authenticate(authHeader string) (*protocol.MemoryUser, error) {
 }
 
 // portValue parses a port string to uint16.
+// 使用 int 累加并在每步校验 ≤65535，拒绝 uint16 回绕溢出（如 "65536"、"99999"）。
 func portValue(s string) (uint16, error) {
-	var p uint16
+	if s == "" {
+		return 0, errors.New("invalid port")
+	}
+	p := 0
 	for _, c := range s {
 		if c < '0' || c > '9' {
 			return 0, errors.New("invalid port")
 		}
-		p = p*10 + uint16(c-'0')
+		p = p*10 + int(c-'0')
+		if p > 65535 {
+			return 0, errors.New("invalid port")
+		}
 	}
-	return p, nil
+	return uint16(p), nil
 }
 
 func (s *Server) handleConnection(ctx context.Context, sessionPolicy policy.Session,

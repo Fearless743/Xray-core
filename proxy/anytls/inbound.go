@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/errors"
 	xnet "github.com/xtls/xray-core/common/net"
@@ -94,6 +95,9 @@ func (s *Server) Process(ctx context.Context, network xnet.Network, conn stat.Co
 		return errors.New("anytls: invalid user")
 	}
 	padlen := binary.BigEndian.Uint16(h[32:34])
+	// padlen 为 uint16，天然上限 64KB(65535)，此处保留该上限不再放宽。
+	// 单连接内存上限说明：本分支一次性分配 padlen 字节做填充丢弃，
+	// 单连接最多持有 64KB padding 缓冲，随读完即释放，不跨连接累积。
 	if padlen > 0 {
 		if _, err := io.ReadFull(br, make([]byte, padlen)); err != nil {
 			return errors.New("anytls: read padding0").Base(err)
@@ -111,6 +115,22 @@ func (s *Server) Process(ctx context.Context, network xnet.Network, conn stat.Co
 	var writeMu sync.Mutex
 	streams := make(map[uint32]*stream)
 	var smu sync.Mutex
+
+	// 清理所有残留 stream，确保 closeTrackingWriter.onClose() 触发，
+	// 从而正确递减 dispatcher 的 IP refcount，防止在线人数虚高。
+	defer func() {
+		smu.Lock()
+		for sid := range streams {
+			delete(streams, sid)
+		}
+		smu.Unlock()
+		for _, st := range streams {
+			if st != nil && st.link != nil {
+				common.Close(st.link.Writer)
+				common.Close(st.link.Reader)
+			}
+		}
+	}()
 
 	// Frame operations
 	fr := newFrameReader(br, ctx)
@@ -205,6 +225,9 @@ func (s *Server) Process(ctx context.Context, network xnet.Network, conn stat.Co
 		case cmdFIN:
 			s.handleFIN(ctx, sid, &streams, &smu, bw)
 		default:
+			// 单连接速率说明：未知 cmd 直接记日志并断开连接，
+			// 恶意对端无法用非法帧堆积消耗资源；如需更细粒度限速
+			// 可在此对未知 cmd 计数后按阈值断开，当前直接断开已是最严策略。
 			errors.LogWarning(ctx, "anytls: unknown cmd=", cmd, " streamId=", sid)
 			return errors.New("anytls: unknown cmd")
 		}

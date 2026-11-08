@@ -45,6 +45,8 @@ func (*Instance) Close() error      { return nil }
 func (m *Instance) SetUserLimit(email string, bytesPerSec int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// bytesPerSec<=0 表示不限速：直接删除 limiter，防止 0 值
+	// 被误用作 rate.Limit(0) 导致连接永远阻塞（误限）。
 	if bytesPerSec <= 0 {
 		delete(m.limiters, email)
 		return

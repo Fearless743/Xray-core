@@ -198,6 +198,12 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 	return inboundLink, outboundLink
 }
 
+// WrapLink wraps a link with per-user stats and bandwidth shaping.
+//
+// 设计局限说明：当前限速仅作用于 link.Writer 方向（经由 DispatchLink 接入的
+// 下行/出站写路径），不对 Reader 方向做令牌限速；上行限速仅在 getLink
+// （Dispatch 路径同时包裹 inbound/outbound Writer）中覆盖。不要假设全双工
+// 限速语义，改动限速覆盖面需评估业务回归。
 func WrapLink(ctx context.Context, policyManager policy.Manager, statsManager stats.Manager, link *transport.Link) *transport.Link {
 	sessionInbound := session.InboundFromContext(ctx)
 	var user *protocol.MemoryUser
@@ -244,6 +250,8 @@ func WrapLink(ctx context.Context, policyManager policy.Manager, statsManager st
 
 func applyBandwidthLimit(ctx context.Context, writer buf.Writer, limiter bandwidth.Manager, user *protocol.MemoryUser) buf.Writer {
 	if limiter == nil || user == nil || user.Email == "" {
+		// 无 email 的匿名/直通流量不限速也不计数：metrics 侧表现为
+		// 无 user>>>...>>>traffic 计数器，如需可观测性请在上层补充全局计数。
 		return writer
 	}
 	lim := limiter.GetUserLimiter(user.Email)

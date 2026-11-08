@@ -12,11 +12,7 @@ import (
 func (a *Account) AsAccount() (protocol.Account, error) {
 	id, err := uuid.ParseString(a.Uuid)
 	if err != nil {
-		// If not a valid UUID, derive a deterministic UUID from the string (password-as-uuid mode)
-		id, err = uuid.ParseString(a.Uuid)
-		if err != nil {
-			return nil, errors.New("failed to parse TUIC UUID: ", a.Uuid).Base(err)
-		}
+		return nil, errors.New("failed to parse TUIC UUID: ", a.Uuid).Base(err)
 	}
 	password := a.Password
 	if password == "" {

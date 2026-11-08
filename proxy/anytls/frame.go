@@ -38,6 +38,8 @@ func newFrameReader(br *buf.BufferedReader, ctx context.Context) *frameReader {
 }
 
 // read 读取一个完整帧，返回 cmd, sid, data
+// 单帧长度为 uint16（上限 64KB），单连接内逐帧读完即处理，不做跨帧累积，
+// 内存占用天然有界；未知 cmd 由调用方记日志后断开（见 inbound.go）。
 func (r *frameReader) read() (cmd byte, sid uint32, data []byte, err error) {
 	// 读取固定 7 字节帧头
 	_, err = io.ReadFull(r.br, r.header[:])
