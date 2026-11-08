@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package xray.proxy.masque;
+option go_package = "github.com/xtls/xray-core/proxy/masque";
+
+import "common/protocol/user.proto";
+
+message ClientConfig {
+}
+
+message ServerConfig {
+  repeated xray.common.protocol.User users = 1;
+  // Tunnel network prefixes, at most one per IP version, e.g. "10.0.0.1/24".
+  // The prefix address itself is used by the server; other addresses are
+  // assigned to clients.
+  repeated string addresses = 2;
+  // Additional IP prefixes advertised to clients (default: all traffic).
+  repeated string advertise_routes = 3;
+  // Tunnel MTU (default 1280).
+  uint32 mtu = 4;
+}

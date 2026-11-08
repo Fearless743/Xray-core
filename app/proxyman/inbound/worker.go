@@ -21,12 +21,14 @@ import (
 	"github.com/xtls/xray-core/proxy"
 	"github.com/xtls/xray-core/proxy/hysteria/account"
 	hyCtx "github.com/xtls/xray-core/proxy/hysteria/ctx"
-	tuicAccount "github.com/xtls/xray-core/proxy/tuic/account"
-	tuicCtx "github.com/xtls/xray-core/proxy/tuic/ctx"
+	masqueAccount "github.com/xtls/xray-core/proxy/masque/account"
+	masqueCtx "github.com/xtls/xray-core/proxy/masque/ctx"
 	mieruAccount "github.com/xtls/xray-core/proxy/mieru/account"
 	mieruCtx "github.com/xtls/xray-core/proxy/mieru/ctx"
 	sqAccount "github.com/xtls/xray-core/proxy/shadowquic/account"
 	sqCtx "github.com/xtls/xray-core/proxy/shadowquic/ctx"
+	tuicAccount "github.com/xtls/xray-core/proxy/tuic/account"
+	tuicCtx "github.com/xtls/xray-core/proxy/tuic/ctx"
 	"github.com/xtls/xray-core/transport/internet"
 	"github.com/xtls/xray-core/transport/internet/stat"
 	"github.com/xtls/xray-core/transport/internet/tcp"
@@ -171,6 +173,12 @@ func (w *tcpWorker) Start() error {
 	}
 	if v, ok := w.proxy.(ShadowquicInboundValidator); ok {
 		ctx = sqCtx.ContextWithValidator(ctx, v.ShadowquicInboundValidator())
+	}
+	type MasqueInboundValidator interface {
+		MasqueInboundValidator() *masqueAccount.Validator
+	}
+	if v, ok := w.proxy.(MasqueInboundValidator); ok {
+		ctx = masqueCtx.ContextWithValidator(ctx, v.MasqueInboundValidator())
 	}
 
 	hub, err := internet.ListenTCP(ctx, w.address, w.port, w.stream, func(conn stat.Connection) {

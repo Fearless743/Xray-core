@@ -36,15 +36,16 @@ import (
 	"github.com/xtls/xray-core/transport/internet/finalmask/xicmp"
 	"github.com/xtls/xray-core/transport/internet/httpupgrade"
 	"github.com/xtls/xray-core/transport/internet/hysteria"
-	"github.com/xtls/xray-core/transport/internet/tuic"
-	"github.com/xtls/xray-core/transport/internet/mieru"
-	"github.com/xtls/xray-core/transport/internet/shadowquic"
 	"github.com/xtls/xray-core/transport/internet/hysteria/congestion/bbr"
 	"github.com/xtls/xray-core/transport/internet/kcp"
+	"github.com/xtls/xray-core/transport/internet/masque"
+	"github.com/xtls/xray-core/transport/internet/mieru"
 	"github.com/xtls/xray-core/transport/internet/reality"
+	"github.com/xtls/xray-core/transport/internet/shadowquic"
 	"github.com/xtls/xray-core/transport/internet/splithttp"
 	"github.com/xtls/xray-core/transport/internet/tcp"
 	"github.com/xtls/xray-core/transport/internet/tls"
+	"github.com/xtls/xray-core/transport/internet/tuic"
 	"github.com/xtls/xray-core/transport/internet/websocket"
 	"google.golang.org/protobuf/proto"
 )
@@ -1040,6 +1041,8 @@ func (p TransportProtocol) Build() (string, error) {
 		return "mieru", nil
 	case "shadowquic":
 		return "shadowquic", nil
+	case "masque":
+		return "masque", nil
 	default:
 		return "", errors.New("Config: unknown transport protocol: ", p)
 	}
@@ -1746,25 +1749,26 @@ type FinalMask struct {
 }
 
 type StreamConfig struct {
-	Address             *Address           `json:"address"`
-	Port                uint16             `json:"port"`
-	Network             *TransportProtocol `json:"network"`
-	Security            string             `json:"security"`
-	FinalMask           *FinalMask         `json:"finalmask"`
-	TLSSettings         *TLSConfig         `json:"tlsSettings"`
-	REALITYSettings     *REALITYConfig     `json:"realitySettings"`
-	RAWSettings         *TCPConfig         `json:"rawSettings"`
-	TCPSettings         *TCPConfig         `json:"tcpSettings"`
-	XHTTPSettings       *SplitHTTPConfig   `json:"xhttpSettings"`
-	SplitHTTPSettings   *SplitHTTPConfig   `json:"splithttpSettings"`
-	KCPSettings         *KCPConfig         `json:"kcpSettings"`
-	GRPCSettings        *GRPCConfig        `json:"grpcSettings"`
-	WSSettings          *WebSocketConfig   `json:"wsSettings"`
-	HTTPUPGRADESettings *HttpUpgradeConfig `json:"httpupgradeSettings"`
-	HysteriaSettings    *HysteriaConfig    `json:"hysteriaSettings"`
+	Address             *Address              `json:"address"`
+	Port                uint16                `json:"port"`
+	Network             *TransportProtocol    `json:"network"`
+	Security            string                `json:"security"`
+	FinalMask           *FinalMask            `json:"finalmask"`
+	TLSSettings         *TLSConfig            `json:"tlsSettings"`
+	REALITYSettings     *REALITYConfig        `json:"realitySettings"`
+	RAWSettings         *TCPConfig            `json:"rawSettings"`
+	TCPSettings         *TCPConfig            `json:"tcpSettings"`
+	XHTTPSettings       *SplitHTTPConfig      `json:"xhttpSettings"`
+	SplitHTTPSettings   *SplitHTTPConfig      `json:"splithttpSettings"`
+	KCPSettings         *KCPConfig            `json:"kcpSettings"`
+	GRPCSettings        *GRPCConfig           `json:"grpcSettings"`
+	WSSettings          *WebSocketConfig      `json:"wsSettings"`
+	HTTPUPGRADESettings *HttpUpgradeConfig    `json:"httpupgradeSettings"`
+	HysteriaSettings    *HysteriaConfig       `json:"hysteriaSettings"`
 	TuicSettings        *TuicConfig           `json:"tuicSettings"`
 	MieruSettings       *MieruTransportConfig `json:"mieruSettings"`
 	ShadowQUICSettings  *ShadowQUICConfig     `json:"shadowquicSettings"`
+	MasqueSettings      *MasqueConfig         `json:"masqueSettings"`
 	SocketSettings      *SocketConfig         `json:"sockopt"`
 }
 
@@ -1925,6 +1929,16 @@ func (c *StreamConfig) Build() (*internet.StreamConfig, error) {
 			Settings:     serial.ToTypedMessage(sq),
 		})
 	}
+	if c.MasqueSettings != nil {
+		mq, err := c.MasqueSettings.Build()
+		if err != nil {
+			return nil, errors.New("Failed to build MASQUE config.").Base(err)
+		}
+		config.TransportSettings = append(config.TransportSettings, &internet.TransportConfig{
+			ProtocolName: "masque",
+			Settings:     serial.ToTypedMessage(mq),
+		})
+	}
 	if c.SocketSettings != nil {
 		ss, err := c.SocketSettings.Build()
 		if err != nil {
@@ -2071,12 +2085,11 @@ func (v *ProxyConfig) Build() (*internet.ProxyConfig, error) {
 	}, nil
 }
 
-
 type TuicConfig struct {
-	CongestionControl    string `json:"congestionControl"`
-	AuthTimeoutMs        int32  `json:"authTimeoutMs"`
-	MaxIdleTimeoutMs     int32  `json:"maxIdleTimeoutMs"`
-	MaxUdpRelayPacketSize int32 `json:"maxUdpRelayPacketSize"`
+	CongestionControl     string `json:"congestionControl"`
+	AuthTimeoutMs         int32  `json:"authTimeoutMs"`
+	MaxIdleTimeoutMs      int32  `json:"maxIdleTimeoutMs"`
+	MaxUdpRelayPacketSize int32  `json:"maxUdpRelayPacketSize"`
 }
 
 func (c *TuicConfig) Build() (proto.Message, error) {
@@ -2088,7 +2101,6 @@ func (c *TuicConfig) Build() (proto.Message, error) {
 	}
 	return config, nil
 }
-
 
 type MieruTransportConfig struct {
 	Transport      string `json:"transport"`
@@ -2109,6 +2121,22 @@ type ShadowQUICConfig struct {
 	CongestionControl string   `json:"congestionControl"`
 	ZeroRTT           bool     `json:"zeroRtt"`
 	MaxIdleTimeoutMs  int32    `json:"maxIdleTimeoutMs"`
+}
+
+type MasqueConfig struct {
+	Path             string `json:"path"`
+	Certificate      string `json:"certificate"`
+	Key              string `json:"key"`
+	MaxIdleTimeoutMs int32  `json:"maxIdleTimeoutMs"`
+}
+
+func (c *MasqueConfig) Build() (proto.Message, error) {
+	return &masque.Config{
+		Path:             c.Path,
+		Certificate:      c.Certificate,
+		Key:              c.Key,
+		MaxIdleTimeoutMs: int64(c.MaxIdleTimeoutMs),
+	}, nil
 }
 
 func (c *ShadowQUICConfig) Build() (proto.Message, error) {

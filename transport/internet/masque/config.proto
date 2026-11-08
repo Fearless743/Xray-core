@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package xray.transport.internet.masque;
+option go_package = "github.com/xtls/xray-core/transport/internet/masque";
+
+message Config {
+  // URI path prefix of the CONNECT-IP resource.
+  // Default: /.well-known/masque/ip/
+  string path = 1;
+  // PEM-encoded TLS certificate for the QUIC listener.
+  string certificate = 2;
+  // PEM-encoded TLS private key for the QUIC listener.
+  string key = 3;
+  int64 max_idle_timeout_ms = 4;
+}
