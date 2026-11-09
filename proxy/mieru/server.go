@@ -2,14 +2,18 @@ package mieru
 
 import (
 	"context"
+	"io"
+	"net"
 	"time"
 
+	mierucommon "github.com/enfein/mieru/v3/apis/common"
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/log"
 	xnet "github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/protocol"
+	"github.com/xtls/xray-core/common/protocol/udp"
 	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/common/signal"
 	"github.com/xtls/xray-core/common/task"
@@ -19,6 +23,7 @@ import (
 	"github.com/xtls/xray-core/proxy"
 	"github.com/xtls/xray-core/proxy/mieru/account"
 	"github.com/xtls/xray-core/transport/internet/stat"
+	internetudp "github.com/xtls/xray-core/transport/internet/udp"
 )
 
 func init() {
@@ -128,7 +133,80 @@ func (s *Server) Process(ctx context.Context, network xnet.Network, conn stat.Co
 	})
 	errors.LogInfo(ctx, "received request for ", dest)
 
+	if dest.Network == xnet.Network_UDP {
+		return s.handleUDPAssociate(ctx, conn, dispatcher, useremail, sessionPolicy)
+	}
+
 	return s.relay(ctx, sessionPolicy, dest, buf.NewReader(conn), buf.NewWriter(conn), dispatcher)
+}
+
+func (s *Server) handleUDPAssociate(ctx context.Context, conn stat.Connection, dispatcher routing.Dispatcher, useremail string, sessionPolicy policy.Session) error {
+	inbound := session.InboundFromContext(ctx)
+
+	// Wrap the mieru stream into a packet-oriented connection. The official
+	// mieru client encapsulates UDP packets with a PacketOverStreamTunnel
+	// framing and a SOCKS5 UDP-associate header; the wrappers below reverse
+	// that so we can dispatch individual datagrams.
+	packetTunnel := mierucommon.NewPacketOverStreamTunnel(conn)
+	udpConn := mierucommon.NewUDPAssociateWrapper(packetTunnel)
+
+	udpServer := internetudp.NewDispatcher(dispatcher, func(ctx context.Context, packet *udp.Packet) {
+		if packet == nil || packet.Payload == nil {
+			return
+		}
+		payload := packet.Payload
+		defer payload.Release()
+		addr := &net.UDPAddr{
+			IP:   packet.Source.Address.IP(),
+			Port: int(packet.Source.Port),
+		}
+		if _, err := udpConn.WriteTo(payload.Bytes(), addr); err != nil {
+			errors.LogDebug(ctx, "mieru: write udp response: ", err)
+		}
+	})
+	defer udpServer.RemoveRay()
+
+	bufBytes := make([]byte, 65535)
+	for {
+		n, srcAddr, err := udpConn.ReadFrom(bufBytes)
+		if err != nil {
+			if errors.Cause(err) == io.EOF || errors.Cause(err) == io.ErrUnexpectedEOF {
+				return nil
+			}
+			return errors.New("mieru: read udp associate: ").Base(err)
+		}
+		if n == 0 {
+			continue
+		}
+		uAddr, ok := srcAddr.(*net.UDPAddr)
+		if !ok || uAddr == nil {
+			continue
+		}
+		ipStr := ""
+		if uAddr.IP != nil {
+			ipStr = uAddr.IP.String()
+		}
+		if ipStr == "" {
+			ipStr = "0.0.0.0"
+		}
+		destination := xnet.UDPDestination(xnet.ParseAddress(ipStr), xnet.Port(uAddr.Port))
+
+		payload := buf.FromBytes(append([]byte(nil), bufBytes[:n]...))
+		payload.UDP = &destination
+
+		currentCtx := ctx
+		if inbound != nil && inbound.Source.IsValid() {
+			currentCtx = log.ContextWithAccessMessage(ctx, &log.AccessMessage{
+				From:   inbound.Source,
+				To:     destination,
+				Status: log.AccessAccepted,
+				Reason: "",
+				Email:  useremail,
+			})
+		}
+
+		udpServer.Dispatch(currentCtx, destination, payload)
+	}
 }
 
 func (s *Server) relay(ctx context.Context, sessionPolicy policy.Session, destination xnet.Destination,
