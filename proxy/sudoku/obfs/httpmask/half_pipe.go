@@ -70,11 +70,16 @@ func (d *pipeDeadline) set(t time.Time) {
 	}
 
 	if !closed {
-		close(d.cancel)
+		closePipeDeadlineChan(d.cancel)
 	}
 }
 
-func (d *pipeDeadline) expire() { close(d.cancel) }
+func closePipeDeadlineChan(ch chan struct{}) {
+	defer func() { recover() }()
+	close(ch)
+}
+
+func (d *pipeDeadline) expire() { closePipeDeadlineChan(d.cancel) }
 
 func (d *pipeDeadline) wait() <-chan struct{} {
 	d.mu.Lock()

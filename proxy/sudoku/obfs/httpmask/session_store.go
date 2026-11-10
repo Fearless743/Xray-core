@@ -53,21 +53,30 @@ func newTunnelSession(conn *halfPipeConn) *tunnelSession {
 
 // shutdown disarms the reaper, stops the active pull and closes the tunnel pipe.
 func (sess *tunnelSession) shutdown() {
-	sess.reaper.Stop()
+	if sess.reaper != nil {
+		sess.reaper.Stop()
+	}
 	sess.pullMu.Lock()
 	lease := sess.pull
 	sess.pullMu.Unlock()
-	lease.stop()
-	_ = sess.conn.Close()
+	if lease != nil {
+		lease.stop()
+	}
+	if sess.conn != nil {
+		_ = sess.conn.Close()
+	}
 }
 
 func (sess *tunnelSession) endPull(lease *sessionPullLease) {
+	if lease == nil {
+		return
+	}
 	sess.pullMu.Lock()
 	if sess.pull == lease {
 		sess.pull = nil
 	}
 	sess.pullMu.Unlock()
-	close(lease.done)
+	lease.doneOnce.Do(func() { close(lease.done) })
 }
 
 // sessionPullLease is the exclusive right to read a session's downlink.
@@ -75,6 +84,7 @@ type sessionPullLease struct {
 	cancel   chan struct{}
 	done     chan struct{}
 	stopOnce sync.Once
+	doneOnce sync.Once
 	rawConn  net.Conn
 }
 
